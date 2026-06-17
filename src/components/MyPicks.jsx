@@ -63,7 +63,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     loginUser(data)
   }
 
- async function savePrediction(matchId) {
+async function savePrediction(matchId) {
     const pred = localPreds[matchId]
     if (pred?.home === undefined || pred?.away === undefined) return
     const match = matches.find(m => m.id === matchId)
