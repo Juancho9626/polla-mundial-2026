@@ -65,38 +65,40 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
 
 async function savePrediction(matchId) {
     const pred = localPreds[matchId]
-    if (pred?.home === undefined || pred?.away === undefined) return
+    console.log('SAVE CLICK:', matchId, 'pred:', pred, 'user:', currentUser?.id)
+    if (pred?.home === undefined || pred?.away === undefined) {
+      console.log('EARLY EXIT: pred incomplete')
+      return notify('Ingresa ambos marcadores', 'warning')
+    }
     const match = matches.find(m => m.id === matchId)
     const isAdmin = currentUser.email === 'juancho9626@gmail.com'
-    if (!isAdmin && isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
-    if (match?.is_finished) return notify('Este partido ya terminó', 'warning')
+    if (!isAdmin && isMatchLocked(match?.match_date)) {
+      console.log('EARLY EXIT: locked')
+      return notify('Este partido ya está bloqueado 🔒', 'warning')
+    }
+    if (match?.is_finished) {
+      console.log('EARLY EXIT: finished')
+      return notify('Este partido ya terminó', 'warning')
+    }
     setSavingMatch(s => ({ ...s, [matchId]: true }))
-    const { error } = await supabase.from('predictions').upsert({
+    const payload = {
       participant_id: currentUser.id,
       match_id: matchId,
       predicted_home: parseInt(pred.home),
       predicted_away: parseInt(pred.away),
       is_locked: true
-    }, { onConflict: 'participant_id,match_id' })
+    }
+    console.log('UPSERT PAYLOAD:', payload)
+    const { data, error } = await supabase.from('predictions').upsert(payload, { onConflict: 'participant_id,match_id' }).select()
+    console.log('UPSERT RESULT:', { data, error })
     setSavingMatch(s => ({ ...s, [matchId]: false }))
     if (error) {
       console.error('UPSERT ERROR:', error)
-      notify('Error guardando: ' + error.message, 'error')
+      notify('Error: ' + error.message, 'error')
       return
     }
     onRefresh()
     notify('✅ Predicción guardada')
-  }
-  async function saveTopScorer() {
-    if (!topScorer.trim()) return notify('Escribe el nombre del goleador', 'error')
-    const existing = topScorerPicks.find(t => t.participant_id === currentUser.id)
-    if (existing) {
-      await supabase.from('top_scorer_picks').update({ player_name: topScorer.trim() }).eq('id', existing.id)
-    } else {
-      await supabase.from('top_scorer_picks').insert({ participant_id: currentUser.id, player_name: topScorer.trim() })
-    }
-    onRefresh()
-    notify('✅ Goleador guardado')
   }
 
   // Calcular tabla de grupo y mostrar confirmación
