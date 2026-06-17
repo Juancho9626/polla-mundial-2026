@@ -288,7 +288,20 @@ async function savePrediction(matchId) {
           {/* Matches sorted by date */}
           <div style={{ marginBottom:8 }}>
             <div style={{ display:'grid', gap:8 }}>
-              {[...groupMatches].sort((a,b) => new Date(a.match_date) - new Date(b.match_date)).map(match => {
+             {[...groupMatches.filter(m => m.group_name === activeGroup)].sort((a,b) => {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const tomorrow = new Date(today.getTime() + 86400000)
+  const aDate = new Date(a.match_date)
+  const bDate = new Date(b.match_date)
+  const aIsToday = aDate >= today && aDate < tomorrow
+  const bIsToday = bDate >= today && bDate < tomorrow
+  if (aIsToday && !bIsToday) return -1
+  if (!aIsToday && bIsToday) return 1
+  if (!a.is_finished && b.is_finished) return -1
+  if (a.is_finished && !b.is_finished) return 1
+  return aDate - bDate
+}).map(match => {
                 const locked = isMatchLocked(match.match_date)
                 const finished = match.is_finished
                 const local = localPreds[match.id] || {}
