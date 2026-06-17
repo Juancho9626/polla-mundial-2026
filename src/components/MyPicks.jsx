@@ -70,12 +70,14 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     if (isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
     if (match?.is_finished) return notify('Este partido ya terminó', 'warning')
     setSavingMatch(s => ({ ...s, [matchId]: true }))
-    const existing = predictions.find(p => p.participant_id === currentUser.id && p.match_id === matchId)
-    if (existing) {
-      await supabase.from('predictions').update({ predicted_home: parseInt(pred.home), predicted_away: parseInt(pred.away), updated_at: new Date().toISOString(), is_locked: true }).eq('id', existing.id)
-    } else {
-      await supabase.from('predictions').insert({ participant_id: currentUser.id, match_id: matchId, predicted_home: parseInt(pred.home), predicted_away: parseInt(pred.away), is_locked: true })
-    }
+    await supabase.from('predictions').upsert({
+      participant_id: currentUser.id,
+      match_id: matchId,
+      predicted_home: parseInt(pred.home),
+      predicted_away: parseInt(pred.away),
+      is_locked: true,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'participant_id,match_id' })
     setSavingMatch(s => ({ ...s, [matchId]: false }))
     onRefresh()
     notify('✅ Predicción guardada')
