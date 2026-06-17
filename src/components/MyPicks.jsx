@@ -36,7 +36,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
   const [topScorer, setTopScorer]   = useState('')
   const [activeSection, setActiveSection] = useState('matches')
   const [activeGroup, setActiveGroup] = useState('A')
-  const [groupConfirm, setGroupConfirm] = useState(null) // { group, tabla }
+  const [groupConfirm, setGroupConfirm] = useState(null)
   const [savingGroup, setSavingGroup] = useState(false)
   const showPass = email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
 
@@ -63,23 +63,13 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     loginUser(data)
   }
 
-async function savePrediction(matchId) {
+  async function savePrediction(matchId) {
     const pred = localPreds[matchId]
-    console.log('SAVE CLICK:', matchId, 'pred:', pred, 'user:', currentUser?.id)
-    if (pred?.home === undefined || pred?.away === undefined) {
-      console.log('EARLY EXIT: pred incomplete')
-      return notify('Ingresa ambos marcadores', 'warning')
-    }
+    if (pred?.home === undefined || pred?.away === undefined) return notify('Ingresa ambos marcadores', 'warning')
     const match = matches.find(m => m.id === matchId)
     const isAdmin = currentUser.email === 'juancho9626@gmail.com'
-    if (!isAdmin && isMatchLocked(match?.match_date)) {
-      console.log('EARLY EXIT: locked')
-      return notify('Este partido ya está bloqueado 🔒', 'warning')
-    }
-    if (match?.is_finished) {
-      console.log('EARLY EXIT: finished')
-      return notify('Este partido ya terminó', 'warning')
-    }
+    if (!isAdmin && isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
+    if (match?.is_finished) return notify('Este partido ya terminó', 'warning')
     setSavingMatch(s => ({ ...s, [matchId]: true }))
     const payload = {
       participant_id: currentUser.id,
@@ -88,9 +78,7 @@ async function savePrediction(matchId) {
       predicted_away: parseInt(pred.away),
       is_locked: true
     }
-    console.log('UPSERT PAYLOAD:', payload)
-    const { data, error } = await supabase.from('predictions').upsert(payload, { onConflict: 'participant_id,match_id' }).select()
-    console.log('UPSERT RESULT:', { data, error })
+    const { error } = await supabase.from('predictions').upsert(payload, { onConflict: 'participant_id,match_id' })
     setSavingMatch(s => ({ ...s, [matchId]: false }))
     if (error) {
       console.error('UPSERT ERROR:', error)
@@ -101,15 +89,12 @@ async function savePrediction(matchId) {
     notify('✅ Predicción guardada')
   }
 
-  // Calcular tabla de grupo y mostrar confirmación
   function calcularYConfirmar(group) {
     const groupMatches = matches.filter(m => m.group_name === group && m.stage === 'group')
     const teams = [...new Set([...groupMatches.map(m=>m.home_team), ...groupMatches.map(m=>m.away_team)])]
-
     if (!grupoCompleto(groupMatches, localPreds)) {
       return notify(`Completa todos los marcadores del Grupo ${group} primero`, 'warning')
     }
-
     const tabla = calcularTablaGrupo(teams, groupMatches, localPreds)
     setGroupConfirm({ group, tabla })
   }
@@ -120,7 +105,6 @@ async function savePrediction(matchId) {
     const { group, tabla } = groupConfirm
     const existing = await supabase.from('group_order_picks').select('*')
       .eq('participant_id', currentUser.id).eq('group_name', group).single()
-
     const data = {
       participant_id: currentUser.id,
       group_name: group,
@@ -129,13 +113,11 @@ async function savePrediction(matchId) {
       third_place: tabla[2]?.team || '',
       fourth_place: tabla[3]?.team || '',
     }
-
     if (existing.data) {
       await supabase.from('group_order_picks').update({ ...data, updated_at: new Date().toISOString() }).eq('id', existing.data.id)
     } else {
       await supabase.from('group_order_picks').insert(data)
     }
-
     setSavingGroup(false)
     setGroupConfirm(null)
     onRefresh()
@@ -150,7 +132,6 @@ async function savePrediction(matchId) {
     return acc
   }, 0)
 
-  // LOGIN
   if (!currentUser) return (
     <div style={{ maxWidth:440, margin:'0 auto' }}>
       <div style={{ background:'linear-gradient(135deg,rgba(0,30,80,.95),rgba(0,15,50,.97))', border:'1px solid rgba(255,215,0,.25)', borderRadius:'var(--r)', padding:'40px 36px', textAlign:'center', boxShadow:'0 16px 48px rgba(0,48,135,.3)' }}>
@@ -187,9 +168,24 @@ async function savePrediction(matchId) {
   const groupMatches = matches.filter(m => m.stage === 'group')
   const finishedMatches = groupMatches.filter(m => m.is_finished)
 
+  // Sort: today first, then upcoming, then finished
+  const sortedMatches = [...groupMatches].sort((a,b) => {
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const tomorrow = new Date(today.getTime() + 86400000)
+    const aDate = new Date(a.match_date)
+    const bDate = new Date(b.match_date)
+    const aIsToday = aDate >= today && aDate < tomorrow
+    const bIsToday = bDate >= today && bDate < tomorrow
+    if (aIsToday && !bIsToday) return -1
+    if (!aIsToday && bIsToday) return 1
+    if (!a.is_finished && b.is_finished) return -1
+    if (a.is_finished && !b.is_finished) return 1
+    return aDate - bDate
+  })
+
   return (
     <div>
-      {/* Modal de confirmación de clasificados */}
       {groupConfirm && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:500, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
           <div style={{ background:'white', borderRadius:'var(--r)', padding:28, maxWidth:420, width:'100%', boxShadow:'0 24px 64px rgba(0,0,0,0.3)' }}>
@@ -235,7 +231,6 @@ async function savePrediction(matchId) {
         </div>
       )}
 
-      {/* Header */}
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:22, flexWrap:'wrap', gap:12 }}>
         <div>
           <h2 style={{ fontFamily:'var(--font-o)', fontSize:32, fontWeight:700, letterSpacing:3, color:'var(--blue)', textTransform:'uppercase' }}>🎯 Mis Predicciones</h2>
@@ -247,7 +242,6 @@ async function savePrediction(matchId) {
         </div>
       </div>
 
-      {/* Section tabs */}
       <div style={{ display:'flex', gap:6, marginBottom:20, background:'rgba(255,255,255,0.7)', border:'1px solid var(--border)', padding:5, borderRadius:'var(--r)', backdropFilter:'blur(8px)', overflowX:'auto' }}>
         {[
           { id:'matches',  label:'⚽ Mis Marcadores' },
@@ -259,10 +253,8 @@ async function savePrediction(matchId) {
         ))}
       </div>
 
-      {/* ===== MIS MARCADORES ===== */}
       {activeSection === 'matches' && (
         <div>
-          {/* Group selector */}
           <div style={{ display:'flex', gap:6, marginBottom:16, flexWrap:'wrap' }}>
             {GROUPS.map(g => {
               const gMatches = groupMatches.filter(m => m.group_name === g)
@@ -285,23 +277,8 @@ async function savePrediction(matchId) {
             })}
           </div>
 
-          {/* Matches sorted by date */}
-          <div style={{ marginBottom:8 }}>
-            <div style={{ display:'grid', gap:8 }}>
-             {[...groupMatches.filter(m => m.group_name === activeGroup)].sort((a,b) => {
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const tomorrow = new Date(today.getTime() + 86400000)
-  const aDate = new Date(a.match_date)
-  const bDate = new Date(b.match_date)
-  const aIsToday = aDate >= today && aDate < tomorrow
-  const bIsToday = bDate >= today && bDate < tomorrow
-  if (aIsToday && !bIsToday) return -1
-  if (!aIsToday && bIsToday) return 1
-  if (!a.is_finished && b.is_finished) return -1
-  if (a.is_finished && !b.is_finished) return 1
-  return aDate - bDate
-}).map(match => {
+          <div style={{ display:'grid', gap:8 }}>
+            {sortedMatches.map(match => {
                 const locked = isMatchLocked(match.match_date)
                 const finished = match.is_finished
                 const local = localPreds[match.id] || {}
@@ -311,8 +288,6 @@ async function savePrediction(matchId) {
                 const hUrl = flagUrl(match.home_team)
                 const aUrl = flagUrl(match.away_team)
                 const canEdit = !locked && !finished
-
-                // Admin always sees all picks; others only see after lock/finish
                 const isAdminUser = currentUser.email === 'juancho9626@gmail.com'
                 const canSeePicks = locked || finished || isAdminUser
                 const otherPreds = canSeePicks
@@ -321,7 +296,6 @@ async function savePrediction(matchId) {
 
                 return (
                   <div key={match.id} style={{ background:'var(--glass)', border:`1px solid ${finished?'rgba(22,163,74,0.3)':locked?'rgba(220,38,38,0.3)':isSaved?'#93c5fd':'var(--border)'}`, borderRadius:'var(--r)', overflow:'hidden', boxShadow:'var(--shadow)' }}>
-                    {/* Match header */}
                     <div style={{ display:'grid', gridTemplateColumns:'1fr minmax(80px,110px) 1fr', gap:6, alignItems:'center', padding:'12px 10px' }}>
                       <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                         {hUrl && <img src={hUrl} alt={match.home_team} style={{ width:36, height:24, objectFit:'cover', borderRadius:3, boxShadow:'0 1px 4px rgba(0,0,0,0.2)', flexShrink:0 }} />}
@@ -348,7 +322,6 @@ async function savePrediction(matchId) {
                       </div>
                     </div>
 
-                    {/* My prediction input */}
                     <div style={{ padding:'0 16px 14px', borderTop:'1px solid rgba(0,0,0,0.06)' }}>
                       {canEdit ? (
                         <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, marginTop:10, flexWrap:'wrap' }}>
@@ -370,14 +343,12 @@ async function savePrediction(matchId) {
                         </div>
                       )}
 
-                      {/* All picks visible when locked, finished, or admin */}
                       {(locked || finished || currentUser.email === 'juancho9626@gmail.com') && (
                         <div style={{ marginTop:12, paddingTop:10, borderTop:'1px dashed rgba(0,0,0,0.08)' }}>
                           <div style={{ fontSize:10, color:'var(--text3)', fontFamily:'var(--font-c)', letterSpacing:2, textTransform:'uppercase', marginBottom:8 }}>
                             {currentUser.email === 'juancho9626@gmail.com' && !locked && !finished ? '👁️ Vista admin (todos los picks)' : locked ? '🔒 Picks de todos (partido bloqueado)' : '👁️ Picks de todos'}
                           </div>
                           <div style={{ display:'flex', flexWrap:'wrap', gap:5, maxHeight:200, overflowY:'auto' }}>
-                            {/* My pick first */}
                             {existing && (
                               <div style={{ display:'flex', alignItems:'center', gap:5, background:'rgba(0,48,135,0.08)', border:'1px solid rgba(0,48,135,0.2)', borderRadius:8, padding:'4px 10px', fontSize:13 }}>
                                 <div style={{ width:18, height:18, borderRadius:'50%', background:'var(--blue)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'var(--gold)', fontWeight:800 }}>{currentUser.name[0]}</div>
@@ -388,7 +359,6 @@ async function savePrediction(matchId) {
                                 </span>}
                               </div>
                             )}
-                            {/* Others */}
                             {otherPreds.map(pred => {
                               const player = participants.find(p => p.id === pred.participant_id)
                               if (!player) return null
@@ -410,26 +380,22 @@ async function savePrediction(matchId) {
                   </div>
                 )
               })}
-            </div>
           </div>
         </div>
       )}
 
-      {/* ===== CLASIFICADOS ===== */}
       {activeSection === 'groups' && (
         <div>
           <div style={{ background:'rgba(0,48,135,0.06)', border:'1px solid rgba(0,48,135,0.15)', borderRadius:'var(--r)', padding:'14px 18px', marginBottom:20 }}>
             <p style={{ fontSize:13, color:'var(--text2)', lineHeight:1.6 }}>
-              📊 <strong>Cómo funciona:</strong> Llena todos los marcadores de un grupo en "Mis Marcadores", luego vuelve aquí y haz clic en <strong>"Ver mis clasificados"</strong>. El sistema calcula automáticamente quién clasifica según tus predicciones usando los puntos FIFA (Victoria=3, Empate=1, Derrota=0).
+              📊 <strong>Cómo funciona:</strong> Llena todos los marcadores de un grupo en "Mis Marcadores", luego vuelve aquí y haz clic en <strong>"Ver mis clasificados"</strong>.
             </p>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))', gap:14 }}>
             {GROUPS.map(group => {
               const gMatches = groupMatches.filter(m => m.group_name === group)
-              const teams = [...new Set([...gMatches.map(m=>m.home_team), ...gMatches.map(m=>m.away_team)])]
               const isComplete = grupoCompleto(gMatches, localPreds)
               const savedPick = groupOrderPicks ? groupOrderPicks.find ? groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group) : null : null
-
               return (
                 <div key={group} style={{ background:'var(--glass)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'18px', boxShadow:'var(--shadow)' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
@@ -441,8 +407,6 @@ async function savePrediction(matchId) {
                       : <span style={{ fontSize:11, color:'var(--text3)', fontFamily:'var(--font-c)' }}>{gMatches.filter(m=>{const p=localPreds[m.id];return p?.home!==undefined&&p?.home!==''}).length}/{gMatches.length} partidos</span>
                     }
                   </div>
-
-                  {/* Show saved clasificados */}
                   {savedPick && (
                     <div style={{ marginBottom:12 }}>
                       {[savedPick.first_place, savedPick.second_place, savedPick.third_place, savedPick.fourth_place].map((team, i) => (
@@ -455,11 +419,7 @@ async function savePrediction(matchId) {
                       ))}
                     </div>
                   )}
-
-                  <button
-                    onClick={() => calcularYConfirmar(group)}
-                    disabled={!isComplete}
-                    style={{ width:'100%', background: isComplete ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0', color: isComplete ? 'var(--gold)' : 'var(--text3)', border:'none', borderRadius:8, padding:'10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, letterSpacing:1, cursor: isComplete?'pointer':'not-allowed', transition:'all 0.2s', opacity: isComplete?1:0.6 }}>
+                  <button onClick={() => calcularYConfirmar(group)} disabled={!isComplete} style={{ width:'100%', background: isComplete ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0', color: isComplete ? 'var(--gold)' : 'var(--text3)', border:'none', borderRadius:8, padding:'10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, letterSpacing:1, cursor: isComplete?'pointer':'not-allowed', transition:'all 0.2s', opacity: isComplete?1:0.6 }}>
                     {savedPick ? '🔄 RECALCULAR' : isComplete ? '📊 VER MIS CLASIFICADOS' : 'Completa los marcadores primero'}
                   </button>
                 </div>
@@ -469,7 +429,6 @@ async function savePrediction(matchId) {
         </div>
       )}
 
-      {/* ===== GOLEADOR ===== */}
       {activeSection === 'scorer' && (() => {
         const myPick = topScorerPicks.find(t => t.participant_id === currentUser.id)
         const isLocked = !!myPick
@@ -499,29 +458,23 @@ async function savePrediction(matchId) {
                 </div>
               ) : (
                 <div>
-                  <input
-                    value={topScorer}
-                    onChange={e => setTopScorer(e.target.value.toUpperCase())}
-                    placeholder="NOMBRE DEL JUGADOR"
-                    style={{ width:'100%', background:'#f8fafc', border:'2px solid var(--blue)', color:'var(--text)', padding:'13px 18px', borderRadius:12, fontSize:16, marginBottom:10, textAlign:'center', fontFamily:'var(--font-c)', fontWeight:700, letterSpacing:2, outline:'none', textTransform:'uppercase', boxSizing:'border-box' }}
-                  />
+                  <input value={topScorer} onChange={e => setTopScorer(e.target.value.toUpperCase())} placeholder="NOMBRE DEL JUGADOR"
+                    style={{ width:'100%', background:'#f8fafc', border:'2px solid var(--blue)', color:'var(--text)', padding:'13px 18px', borderRadius:12, fontSize:16, marginBottom:10, textAlign:'center', fontFamily:'var(--font-c)', fontWeight:700, letterSpacing:2, outline:'none', textTransform:'uppercase', boxSizing:'border-box' }} />
                   {topScorer.trim().length > 0 && (
                     <div style={{ background:'rgba(255,215,0,0.1)', border:'1px solid rgba(255,215,0,0.4)', borderRadius:8, padding:'8px 14px', marginBottom:12, fontSize:13, color:'var(--text2)' }}>
                       📋 Se guardará como: <strong style={{ color:'var(--blue)', fontFamily:'var(--font-c)', letterSpacing:1 }}>{topScorer.trim()}</strong>
                     </div>
                   )}
-                  <button
-                    onClick={async () => {
-                      if (!topScorer.trim()) return notify('Escribe el nombre del goleador', 'error')
-                      const nombre = topScorer.trim().toUpperCase()
-                      const ok = confirm(`⚠️ CONFIRMACIÓN FINAL\n\nTu goleador:\n"${nombre}"\n\nEsta elección quedará DEFINITIVA y no podrá cambiarse.\n¿El nombre es correcto?`)
-                      if (!ok) return
-                      await supabase.from('top_scorer_picks').insert({ participant_id: currentUser.id, player_name: nombre })
-                      setTopScorer(nombre)
-                      onRefresh()
-                      notify('🔒 Goleador guardado y bloqueado')
-                    }}
-                    style={{ width:'100%', background:'linear-gradient(135deg,var(--gold),var(--gold2))', color:'#000', border:'none', borderRadius:12, padding:14, fontFamily:'var(--font-o)', fontWeight:700, fontSize:16, letterSpacing:2, cursor:'pointer', textTransform:'uppercase' }}>
+                  <button onClick={async () => {
+                    if (!topScorer.trim()) return notify('Escribe el nombre del goleador', 'error')
+                    const nombre = topScorer.trim().toUpperCase()
+                    const ok = confirm(`⚠️ CONFIRMACIÓN FINAL\n\nTu goleador:\n"${nombre}"\n\nEsta elección quedará DEFINITIVA.\n¿El nombre es correcto?`)
+                    if (!ok) return
+                    await supabase.from('top_scorer_picks').insert({ participant_id: currentUser.id, player_name: nombre })
+                    setTopScorer(nombre)
+                    onRefresh()
+                    notify('🔒 Goleador guardado y bloqueado')
+                  }} style={{ width:'100%', background:'linear-gradient(135deg,var(--gold),var(--gold2))', color:'#000', border:'none', borderRadius:12, padding:14, fontFamily:'var(--font-o)', fontWeight:700, fontSize:16, letterSpacing:2, cursor:'pointer', textTransform:'uppercase' }}>
                     🔒 GUARDAR DEFINITIVAMENTE
                   </button>
                 </div>
@@ -531,7 +484,6 @@ async function savePrediction(matchId) {
         )
       })()}
 
-      {/* ===== RESULTADOS ===== */}
       {activeSection === 'results' && (
         <div>
           <h3 style={{ fontFamily:'var(--font-o)', fontSize:20, color:'var(--blue)', letterSpacing:2, marginBottom:16, textTransform:'uppercase' }}>Partidos Finalizados</h3>
