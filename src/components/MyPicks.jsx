@@ -77,7 +77,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
       predicted_away: parseInt(pred.away),
       is_locked: true,
       updated_at: new Date().toISOString()
-    }, { onConflict: 'predictions_participant_id_match_id_key' })
+   }, { onConflict: 'participant_id,match_id' })
     setSavingMatch(s => ({ ...s, [matchId]: false }))
     onRefresh()
     notify('✅ Predicción guardada')
