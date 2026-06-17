@@ -81,7 +81,7 @@ export default function App() {
     if (data) setMatches(data)
   }
   async function loadPredictions() {
-    const { data } = await supabase.from('predictions').select('*')
+    const { data } = await supabase.from('predictions').select('*').limit(10000)
     if (data) setPredictions(data)
   }
   async function loadGroupOrder() {
