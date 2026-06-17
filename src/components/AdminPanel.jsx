@@ -12,41 +12,44 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const [showFinished, setShowFinished] = useState(false)
 
   async function saveResult(matchId) {
-    const s = scores[matchId]
-    if (s?.home === undefined || s?.away === undefined) return notify('Ingresa los dos marcadores', 'warning')
-
-    // Verificar que el partido esté bloqueado antes de guardar resultado
     const match = matches.find(m => m.id === matchId)
-    const now = new Date()
-    const kickoff = new Date(match?.match_date)
-    const diffMin = (kickoff - now) / 60000
-    if (diffMin > 30) return notify('⚠️ El partido aún no está bloqueado para los jugadores', 'warning')
+    const s = scores[matchId]
+    const homeRaw = s?.home ?? match?.home_score
+    const awayRaw = s?.away ?? match?.away_score
+    if (homeRaw === undefined || homeRaw === null || awayRaw === undefined || awayRaw === null)
+      return notify('Ingresa los dos marcadores', 'warning')
+
+    // El bloqueo de 30 min solo aplica a partidos que aún no terminaron
+    if (!match?.is_finished) {
+      const diffMin = (new Date(match?.match_date) - new Date()) / 60000
+      if (diffMin > 30) return notify('⚠️ El partido aún no está bloqueado para los jugadores', 'warning')
+    }
 
     setSaving(sv => ({ ...sv, [matchId]: true }))
-    const homeScore = parseInt(s.home)
-    const awayScore = parseInt(s.away)
+    const homeScore = parseInt(homeRaw)
+    const awayScore = parseInt(awayRaw)
 
-    // 1. Guardar resultado del partido
+    // 1. Guardar / actualizar el resultado del partido
     await supabase.from('matches').update({ home_score: homeScore, away_score: awayScore, is_finished: true }).eq('id', matchId)
 
     // 2. Obtener predicciones existentes
     const { data: preds } = await supabase.from('predictions').select('*').eq('match_id', matchId)
     const predParticipantIds = (preds || []).map(p => p.participant_id)
 
-    // 3. Auto-asignar 0-0 con 1 punto a quienes NO predijeron
+    // 3. Auto-asignar 0-0 con 1 punto a quienes NO predijeron (upsert para no duplicar al recalcular)
     const sinPrediccion = participants.filter(p => !p.is_admin && !predParticipantIds.includes(p.id))
     for (const p of sinPrediccion) {
-      await supabase.from('predictions').insert({
+      await supabase.from('predictions').upsert({
         participant_id: p.id,
         match_id: matchId,
         predicted_home: 0,
         predicted_away: 0,
         is_locked: false,
         points_earned: 1
-      })
+      }, { onConflict: 'participant_id,match_id' })
     }
 
-    // 4. Calcular puntos a quienes SÍ predijeron
+    // 4. Recalcular puntos a quienes SÍ predijeron
     if (preds) {
       for (const pred of preds) {
         const hasPrediction = pred.is_locked === true || (pred.predicted_home !== 0 || pred.predicted_away !== 0)
@@ -58,13 +61,16 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
     setSaving(sv => ({ ...sv, [matchId]: false }))
     setScores(s => { const n={...s}; delete n[matchId]; return n })
     onRefresh()
-    notify('✅ Resultado guardado — puntos calculados para todos los jugadores')
+    notify('✅ Resultado actualizado — puntos recalculados para todos los jugadores')
   }
 
   async function resetResult(matchId, homeName, awayName) {
     if (!confirm(`¿Resetear el resultado de ${homeName} vs ${awayName}?\n\nEsto borrará el marcador y pondrá el partido como pendiente. Los puntos calculados para este partido quedarán en 0.`)) return
     setResetting(r => ({ ...r, [matchId]: true }))
     await supabase.from('matches').update({ home_score: null, away_score: null, is_finished: false }).eq('id', matchId)
+    // Borrar las predicciones 0-0 auto-insertadas (las reales del jugador quedan con is_locked = true)
+    await supabase.from('predictions').delete()
+      .eq('match_id', matchId).eq('predicted_home', 0).eq('predicted_away', 0).eq('is_locked', false)
     const { data: preds } = await supabase.from('predictions').select('*').eq('match_id', matchId)
     if (preds) {
       for (const pred of preds) {
@@ -188,7 +194,7 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
             {pendingMatches.length === 0 && <p style={{ color:'var(--text3)', fontSize:13 }}>No hay partidos pendientes</p>}
           </div>
 
-          {/* Finalizados con opción de resetear */}
+          {/* Finalizados con opción de editar el marcador y recalcular */}
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
             <h4 style={{ fontFamily:'var(--font-c)', fontSize:13, letterSpacing:2, color:'var(--text3)', textTransform:'uppercase' }}>FINALIZADOS ({finishedMatches.length})</h4>
             {finishedMatches.length > 0 && (
@@ -200,20 +206,34 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
 
           {showFinished && (
             <div style={{ display:'grid', gap:6, marginBottom:24 }}>
-              {finishedMatches.map(m => (
-                <div key={m.id} style={{ background:'var(--glass)', border:'1px solid rgba(22,163,74,0.2)', borderRadius:'var(--r-sm)', padding:'10px 16px', display:'flex', alignItems:'center', gap:10 }}>
-                  <span style={{ fontSize:11, background:'#dcfce7', borderRadius:4, padding:'2px 6px', color:'#16a34a', fontFamily:'var(--font-c)', fontWeight:700 }}>G{m.group_name}</span>
-                  <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1 }}>{m.home_team}</span>
-                  <span style={{ fontFamily:'var(--font-d)', fontSize:20, color:'#16a34a', letterSpacing:3 }}>{m.home_score} — {m.away_score}</span>
-                  <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1, textAlign:'right' }}>{m.away_team}</span>
-                  <button
-                    onClick={() => resetResult(m.id, m.home_team, m.away_team)}
-                    disabled={resetting[m.id]}
-                    style={{ background:'#fee2e2', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:6, padding:'5px 12px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:11, letterSpacing:1, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.2s' }}>
-                    {resetting[m.id] ? '...' : '🔄 RESETEAR'}
-                  </button>
-                </div>
-              ))}
+              {finishedMatches.map(m => {
+                const s = scores[m.id] || {}
+                const homeVal = s.home ?? m.home_score
+                const awayVal = s.away ?? m.away_score
+                const changed = parseInt(homeVal) !== m.home_score || parseInt(awayVal) !== m.away_score
+                return (
+                  <div key={m.id} style={{ background:'var(--glass)', border:'1px solid rgba(22,163,74,0.2)', borderRadius:'var(--r-sm)', padding:'10px 16px', display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:11, background:'#dcfce7', borderRadius:4, padding:'2px 6px', color:'#16a34a', fontFamily:'var(--font-c)', fontWeight:700 }}>G{m.group_name}</span>
+                    <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1, minWidth:110 }}>{m.home_team}</span>
+                    <input type="number" min="0" max="30" value={homeVal}
+                      onChange={e=>setScores(sc=>({...sc,[m.id]:{...sc[m.id],home:e.target.value}}))}
+                      style={{ width:46, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', padding:'6px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:18, outline:'none' }} />
+                    <span style={{ color:'var(--text3)', fontFamily:'var(--font-d)', fontSize:16 }}>—</span>
+                    <input type="number" min="0" max="30" value={awayVal}
+                      onChange={e=>setScores(sc=>({...sc,[m.id]:{...sc[m.id],away:e.target.value}}))}
+                      style={{ width:46, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', padding:'6px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:18, outline:'none' }} />
+                    <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1, minWidth:110, textAlign:'right' }}>{m.away_team}</span>
+                    <button onClick={() => saveResult(m.id)} disabled={saving[m.id] || !changed}
+                      style={{ background: changed ? '#16a34a' : '#e2e8f0', color: changed ? '#fff' : 'var(--text3)', border:'none', borderRadius:6, padding:'6px 12px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:11, letterSpacing:1, cursor: changed?'pointer':'not-allowed', whiteSpace:'nowrap', transition:'all 0.2s' }}>
+                      {saving[m.id] ? '...' : '💾 GUARDAR Y RECALCULAR'}
+                    </button>
+                    <button onClick={() => resetResult(m.id, m.home_team, m.away_team)} disabled={resetting[m.id]}
+                      style={{ background:'#fee2e2', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:6, padding:'6px 9px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:11, letterSpacing:1, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.2s' }}>
+                      {resetting[m.id] ? '...' : '🔄'}
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
 
