@@ -81,8 +81,22 @@ export default function App() {
     if (data) setMatches(data)
   }
   async function loadPredictions() {
-    const { data } = await supabase.from('predictions').select('*').limit(10000)
-    if (data) setPredictions(data)
+    // Paginado: PostgREST limita a 1000 filas por consulta, así que traemos por bloques
+    const PAGE = 1000
+    let all = []
+    let desde = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('predictions')
+        .select('*')
+        .order('id', { ascending: true })
+        .range(desde, desde + PAGE - 1)
+      if (error || !data || data.length === 0) break
+      all = all.concat(data)
+      if (data.length < PAGE) break   // última página
+      desde += PAGE
+    }
+    setPredictions(all)
   }
   async function loadGroupOrder() {
     const { data } = await supabase.from('group_order_picks').select('*')
