@@ -63,26 +63,30 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     loginUser(data)
   }
 
-  async function savePrediction(matchId) {
+ async function savePrediction(matchId) {
     const pred = localPreds[matchId]
     if (pred?.home === undefined || pred?.away === undefined) return
     const match = matches.find(m => m.id === matchId)
-    if (isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
+    const isAdmin = currentUser.email === 'juancho9626@gmail.com'
+    if (!isAdmin && isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
     if (match?.is_finished) return notify('Este partido ya terminó', 'warning')
     setSavingMatch(s => ({ ...s, [matchId]: true }))
-    await supabase.from('predictions').upsert({
+    const { error } = await supabase.from('predictions').upsert({
       participant_id: currentUser.id,
       match_id: matchId,
       predicted_home: parseInt(pred.home),
       predicted_away: parseInt(pred.away),
-      is_locked: true,
-      updated_at: new Date().toISOString()
-   }, { onConflict: 'participant_id,match_id' })
+      is_locked: true
+    }, { onConflict: 'participant_id,match_id' })
     setSavingMatch(s => ({ ...s, [matchId]: false }))
+    if (error) {
+      console.error('UPSERT ERROR:', error)
+      notify('Error guardando: ' + error.message, 'error')
+      return
+    }
     onRefresh()
     notify('✅ Predicción guardada')
   }
-
   async function saveTopScorer() {
     if (!topScorer.trim()) return notify('Escribe el nombre del goleador', 'error')
     const existing = topScorerPicks.find(t => t.participant_id === currentUser.id)
