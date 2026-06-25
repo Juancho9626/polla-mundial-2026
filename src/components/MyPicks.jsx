@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase, ADMIN_EMAIL, ADMIN_PASSWORD, calcularPuntos, isMatchLocked, formatDateColombia } from '../lib/supabase.js'
 import { calcularTablaGrupo, grupoCompleto } from '../lib/groupTable.js'
 
@@ -38,7 +38,6 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
   const [activeGroup, setActiveGroup] = useState('A')
   const [groupConfirm, setGroupConfirm] = useState(null)
   const [savingGroup, setSavingGroup] = useState(false)
-  const autoProcessedGroups = useRef(new Set())
   const showPass = email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
 
   useEffect(() => {
@@ -51,41 +50,6 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     const ts = topScorerPicks.find(t => t.participant_id === currentUser.id)
     if (ts) setTopScorer(ts.player_name)
   }, [currentUser, predictions, topScorerPicks])
-
-  // Auto-guardar clasificados de grupos totalmente bloqueados sin intervención del usuario
-  useEffect(() => {
-    if (!currentUser || !matches.length || !predictions.length) return
-    const groupMatchesByGroup = {}
-    matches.filter(m => m.stage === 'group').forEach(m => {
-      if (!groupMatchesByGroup[m.group_name]) groupMatchesByGroup[m.group_name] = []
-      groupMatchesByGroup[m.group_name].push(m)
-    })
-    const predsMap = {}
-    predictions.filter(p => p.participant_id === currentUser.id).forEach(p => {
-      predsMap[p.match_id] = { home: p.predicted_home, away: p.predicted_away }
-    })
-    Object.entries(groupMatchesByGroup).forEach(async ([group, gMatches]) => {
-      const todosBloqueados = gMatches.length > 0 && gMatches.every(m => isMatchLocked(m.match_date) || m.is_finished)
-      if (!todosBloqueados) return
-      const yaSaved = groupOrderPicks && groupOrderPicks.find && groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group)
-      if (yaSaved) return
-      if (autoProcessedGroups.current.has(group)) return
-      if (!grupoCompleto(gMatches, predsMap)) return
-      autoProcessedGroups.current.add(group)
-      const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
-      const tabla = calcularTablaGrupo(teams, gMatches, predsMap)
-      const data = {
-        participant_id: currentUser.id,
-        group_name: group,
-        first_place: tabla[0].team,
-        second_place: tabla[1].team,
-        third_place: tabla[2]?.team || '',
-        fourth_place: tabla[3]?.team || '',
-      }
-      await supabase.from('group_order_picks').insert(data)
-      onRefresh()
-    })
-  }, [currentUser, matches, predictions, groupOrderPicks])
 
   async function handleLogin() {
     if (!email.trim()) return notify('Ingresa tu email', 'error')
