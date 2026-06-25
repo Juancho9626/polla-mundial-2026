@@ -89,14 +89,43 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     notify('✅ Predicción guardada')
   }
 
-  function calcularYConfirmar(group) {
+  // Guarda clasificados directamente en Supabase sin mostrar modal
+  async function guardarClasificadosDirecto(group, tabla) {
+    setSavingGroup(true)
+    const existing = await supabase.from('group_order_picks').select('*')
+      .eq('participant_id', currentUser.id).eq('group_name', group).single()
+    const data = {
+      participant_id: currentUser.id,
+      group_name: group,
+      first_place: tabla[0].team,
+      second_place: tabla[1].team,
+      third_place: tabla[2]?.team || '',
+      fourth_place: tabla[3]?.team || '',
+    }
+    if (existing.data) {
+      await supabase.from('group_order_picks').update({ ...data, updated_at: new Date().toISOString() }).eq('id', existing.data.id)
+    } else {
+      await supabase.from('group_order_picks').insert(data)
+    }
+    setSavingGroup(false)
+    onRefresh()
+    notify(`✅ Clasificados del Grupo ${group} guardados automáticamente`)
+  }
+
+  async function calcularYConfirmar(group) {
     const groupMatches = matches.filter(m => m.group_name === group && m.stage === 'group')
     const teams = [...new Set([...groupMatches.map(m=>m.home_team), ...groupMatches.map(m=>m.away_team)])]
     if (!grupoCompleto(groupMatches, localPreds)) {
       return notify(`Completa todos los marcadores del Grupo ${group} primero`, 'warning')
     }
     const tabla = calcularTablaGrupo(teams, groupMatches, localPreds)
-    setGroupConfirm({ group, tabla })
+    // Si todos los partidos del grupo están bloqueados, guardar automáticamente sin confirmación
+    const todosBloqueados = groupMatches.every(m => isMatchLocked(m.match_date) || m.is_finished)
+    if (todosBloqueados) {
+      await guardarClasificadosDirecto(group, tabla)
+    } else {
+      setGroupConfirm({ group, tabla })
+    }
   }
 
   async function confirmarClasificados() {
@@ -187,44 +216,74 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
   return (
     <div>
       {groupConfirm && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:500, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
-          <div style={{ background:'white', borderRadius:'var(--r)', padding:28, maxWidth:420, width:'100%', boxShadow:'0 24px 64px rgba(0,0,0,0.3)' }}>
-            <h3 style={{ fontFamily:'var(--font-o)', fontSize:22, color:'var(--blue)', letterSpacing:2, textTransform:'uppercase', marginBottom:6 }}>
-              🏆 Clasificados Grupo {groupConfirm.group}
-            </h3>
-            <p style={{ color:'var(--text2)', fontSize:13, marginBottom:20 }}>
-              Según tus predicciones, estos son los resultados calculados. ¿Confirmas?
-            </p>
-            <div style={{ display:'grid', gap:8, marginBottom:20 }}>
-              {groupConfirm.tabla.map((t, i) => (
-                <div key={t.team} style={{
-                  display:'grid', gridTemplateColumns:'32px 1fr repeat(5,36px) 40px',
-                  gap:6, alignItems:'center', padding:'10px 14px',
-                  background: i < 2 ? 'rgba(0,48,135,0.06)' : '#f8fafc',
-                  border: i < 2 ? '1px solid rgba(0,48,135,0.2)' : '1px solid #e2e8f0',
-                  borderRadius:8
-                }}>
-                  <span style={{ fontFamily:'var(--font-d)', fontSize:20, color: i < 2 ? 'var(--blue)' : 'var(--text3)', textAlign:'center' }}>{i+1}</span>
-                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <FlagImg team={t.team} size={24} />
-                    <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, color:'var(--text)' }}>{t.team}</span>
-                    {i < 2 && <span style={{ fontSize:10, background:'var(--blue)', color:'var(--gold)', borderRadius:3, padding:'1px 5px', fontFamily:'var(--font-c)', letterSpacing:1 }}>CLASIFICA</span>}
-                  </div>
-                  {[['PJ',t.pj],['PG',t.pg],['PE',t.pe],['DG',t.dg>0?'+'+t.dg:t.dg],['Pts',t.pts]].map(([lbl,val]) => (
-                    <div key={lbl} style={{ textAlign:'center' }}>
-                      <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--font-c)', letterSpacing:1 }}>{lbl}</div>
-                      <div style={{ fontFamily:'var(--font-d)', fontSize:16, color: lbl==='Pts' ? 'var(--blue)' : 'var(--text)', lineHeight:1.2 }}>{val}</div>
-                    </div>
-                  ))}
-                </div>
-              ))}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:500, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <div style={{ background:'#fff', borderRadius:16, padding:'28px 24px', maxWidth:460, width:'100%', boxShadow:'0 32px 80px rgba(0,0,0,0.35)' }}>
+            {/* Header */}
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+              <span style={{ fontSize:28 }}>🏆</span>
+              <div>
+                <h3 style={{ fontFamily:'var(--font-o)', fontSize:20, color:'var(--blue)', letterSpacing:2, textTransform:'uppercase', margin:0 }}>
+                  Clasificados · Grupo {groupConfirm.group}
+                </h3>
+                <p style={{ color:'var(--text3)', fontSize:12, margin:0, fontFamily:'var(--font-c)' }}>
+                  Según tus predicciones — ¿confirmas el orden?
+                </p>
+              </div>
             </div>
+
+            {/* Divider */}
+            <div style={{ height:1, background:'#e2e8f0', margin:'16px 0' }} />
+
+            {/* Tabla */}
+            <div style={{ display:'grid', gap:6, marginBottom:20 }}>
+              {groupConfirm.tabla.map((t, i) => {
+                const clasificado = i < 2
+                return (
+                  <div key={t.team} style={{
+                    display:'grid',
+                    gridTemplateColumns:'28px 28px minmax(0,1fr) 32px 32px 32px 32px 44px',
+                    gap:4, alignItems:'center',
+                    padding:'10px 12px',
+                    background: clasificado ? 'linear-gradient(90deg,rgba(0,48,135,0.07),rgba(0,48,135,0.03))' : '#f8fafc',
+                    border: clasificado ? '1px solid rgba(0,48,135,0.25)' : '1px solid #e8ecf0',
+                    borderRadius:10,
+                    borderLeft: clasificado ? '3px solid var(--blue)' : '3px solid #e2e8f0',
+                  }}>
+                    {/* Posición */}
+                    <span style={{ fontFamily:'var(--font-d)', fontSize:18, color: clasificado ? 'var(--blue)' : '#94a3b8', textAlign:'center', fontWeight:700 }}>{i+1}</span>
+                    {/* Bandera */}
+                    <FlagImg team={t.team} size={24} />
+                    {/* Nombre + badge CLASIFICA */}
+                    <div style={{ minWidth:0 }}>
+                      <div style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, color: clasificado ? 'var(--blue)' : 'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.team}</div>
+                      {clasificado && (
+                        <div style={{ fontSize:9, background:'var(--blue)', color:'var(--gold)', borderRadius:3, padding:'1px 5px', fontFamily:'var(--font-c)', letterSpacing:1, display:'inline-block', marginTop:2 }}>CLASIFICA</div>
+                      )}
+                    </div>
+                    {/* Stats */}
+                    {[['PJ',t.pj],['PG',t.pg],['PE',t.pe],['DG',t.dg>0?'+'+t.dg:t.dg]].map(([lbl,val]) => (
+                      <div key={lbl} style={{ textAlign:'center' }}>
+                        <div style={{ fontSize:8, color:'#94a3b8', fontFamily:'var(--font-c)', letterSpacing:0.5 }}>{lbl}</div>
+                        <div style={{ fontFamily:'var(--font-d)', fontSize:14, color:'var(--text)', lineHeight:1.2 }}>{val}</div>
+                      </div>
+                    ))}
+                    {/* Puntos - destacado */}
+                    <div style={{ textAlign:'center', background: clasificado ? 'rgba(0,48,135,0.1)' : '#f1f5f9', borderRadius:6, padding:'4px 2px' }}>
+                      <div style={{ fontSize:8, color: clasificado ? 'var(--blue)' : '#94a3b8', fontFamily:'var(--font-c)', letterSpacing:0.5 }}>PTS</div>
+                      <div style={{ fontFamily:'var(--font-d)', fontSize:16, color: clasificado ? 'var(--blue)' : 'var(--text)', fontWeight:700, lineHeight:1.2 }}>{t.pts}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Botones */}
             <div style={{ display:'flex', gap:10 }}>
-              <button onClick={() => setGroupConfirm(null)} style={{ flex:1, background:'#f1f5f9', color:'var(--text2)', border:'1px solid var(--border)', borderRadius:8, padding:12, fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, cursor:'pointer', letterSpacing:1 }}>
+              <button onClick={() => setGroupConfirm(null)} style={{ flex:1, background:'#f1f5f9', color:'var(--text2)', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, cursor:'pointer', letterSpacing:1 }}>
                 CANCELAR
               </button>
-              <button onClick={confirmarClasificados} disabled={savingGroup} style={{ flex:2, background:'linear-gradient(135deg,var(--blue),var(--blue-dark))', color:'var(--gold)', border:'none', borderRadius:8, padding:12, fontFamily:'var(--font-c)', fontWeight:700, fontSize:14, cursor:'pointer', letterSpacing:1, textTransform:'uppercase' }}>
-                {savingGroup ? '...' : '✅ CONFIRMAR CLASIFICADOS'}
+              <button onClick={confirmarClasificados} disabled={savingGroup} style={{ flex:2, background:'linear-gradient(135deg,var(--blue),var(--blue-dark))', color:'var(--gold)', border:'none', borderRadius:10, padding:'12px 10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:14, cursor: savingGroup ? 'not-allowed' : 'pointer', letterSpacing:1, textTransform:'uppercase', opacity: savingGroup ? 0.7 : 1 }}>
+                {savingGroup ? 'Guardando...' : '✅ CONFIRMAR CLASIFICADOS'}
               </button>
             </div>
           </div>
