@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { supabase, calcularPuntos } from '../lib/supabase.js'
+import { supabase, calcularPuntos, isMatchLocked } from '../lib/supabase.js'
+import { calcularTablaGrupo } from '../lib/groupTable.js'
 
 export default function AdminPanel({ matches, participants, scoringConfig, appConfig, predictions, groupOrderPicks, topScorerPicks, onRefresh, notify }) {
   const [scores, setScores]     = useState({})
@@ -12,6 +13,7 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const [showFinished, setShowFinished] = useState(false)
   const [classifiedAnswers, setClassifiedAnswers] = useState({})
   const [savingClassified, setSavingClassified] = useState(false)
+  const [savingMassive, setSavingMassive] = useState(false)
 
   async function saveResult(matchId) {
     const match = matches.find(m => m.id === matchId)
@@ -140,6 +142,53 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const finishedMatches = matches.filter(m => m.is_finished && m.stage === 'group')
   const nonAdminParticipants = participants.filter(p => !p.is_admin)
   const GROUPS = [...new Set(matches.filter(m => m.stage === 'group').map(m => m.group_name))].sort()
+
+  async function calcularClasificadosMasivo() {
+    const gruposFinalizados = GROUPS.filter(g => {
+      const gMatches = matches.filter(m => m.group_name === g && m.stage === 'group')
+      return gMatches.length > 0 && gMatches.every(m => m.is_finished)
+    })
+    if (gruposFinalizados.length === 0) return notify('No hay grupos con todos los partidos finalizados', 'warning')
+    if (!confirm(`¿Calcular clasificados automáticamente para todos los participantes?\n\nGrupos finalizados: ${gruposFinalizados.join(', ')}\n\nSolo se generarán los que aún no tienen clasificados guardados.`)) return
+
+    setSavingMassive(true)
+    let generados = 0
+
+    for (const participante of nonAdminParticipants) {
+      const predsMap = {}
+      predictions.filter(p => p.participant_id === participante.id).forEach(p => {
+        predsMap[p.match_id] = { home: p.predicted_home, away: p.predicted_away }
+      })
+
+      for (const group of gruposFinalizados) {
+        const yaSaved = groupOrderPicks.find(g => g.participant_id === participante.id && g.group_name === group)
+        if (yaSaved) continue
+
+        const gMatches = matches.filter(m => m.group_name === group && m.stage === 'group')
+        const predsMapCompleto = { ...predsMap }
+        gMatches.forEach(m => {
+          if (!predsMapCompleto[m.id]) predsMapCompleto[m.id] = { home: 0, away: 0 }
+        })
+
+        const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
+        const tabla = calcularTablaGrupo(teams, gMatches, predsMapCompleto)
+
+        const { error } = await supabase.from('group_order_picks').insert({
+          participant_id: participante.id,
+          group_name: group,
+          first_place: tabla[0].team,
+          second_place: tabla[1].team,
+          third_place: tabla[2]?.team || '',
+          fourth_place: tabla[3]?.team || '',
+        })
+        if (!error) generados++
+      }
+    }
+
+    setSavingMassive(false)
+    onRefresh()
+    notify(`✅ ${generados} clasificados generados para todos los participantes`)
+  }
 
   async function calcularPuntosClasificados() {
     // Validar que todos los grupos tengan los 4 puestos ingresados
@@ -306,6 +355,21 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
               <strong>+{scoringConfig.classified_team_points} pt</strong> por cada equipo acertado en el top 2 (sin importar posición) ·
               <strong> +{scoringConfig.group_order_points} pts</strong> si el orden de los <strong>4 equipos es exacto</strong> (1ro=1ro, 2do=2do, 3ro=3ro, 4to=4to)
             </p>
+          </div>
+
+          {/* Botón masivo */}
+          <div style={{ background:'rgba(22,163,74,0.06)', border:'1px solid rgba(22,163,74,0.25)', borderRadius:'var(--r)', padding:'16px 18px', marginBottom:20, display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+            <div>
+              <p style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, color:'#16a34a', letterSpacing:1, marginBottom:4 }}>⚡ PASO 1 — Generar clasificados para todos</p>
+              <p style={{ fontSize:12, color:'var(--text2)' }}>Calcula y guarda los clasificados de grupos finalizados para todos los participantes, sin que tengan que entrar a la app.</p>
+            </div>
+            <button
+              onClick={calcularClasificadosMasivo}
+              disabled={savingMassive}
+              style={{ background: savingMassive ? '#e2e8f0' : 'linear-gradient(135deg,#16a34a,#15803d)', color: savingMassive ? 'var(--text3)' : '#fff', border:'none', borderRadius:10, padding:'11px 20px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, letterSpacing:1, cursor: savingMassive ? 'not-allowed' : 'pointer', whiteSpace:'nowrap', transition:'all 0.2s' }}
+            >
+              {savingMassive ? 'Generando...' : '⚡ GENERAR PARA TODOS'}
+            </button>
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))', gap:12, marginBottom:24 }}>
