@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, ADMIN_EMAIL, ADMIN_PASSWORD, calcularPuntos, isMatchLocked, isMatchAlertActive, formatDateColombia } from './lib/supabase.js'
+import { calcularTablaGrupo, grupoCompleto } from './lib/groupTable.js'
 import Background from './components/Background.jsx'
 import Header from './components/Header.jsx'
 import Leaderboard from './components/Leaderboard.jsx'
@@ -31,6 +32,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [notification, setNotification] = useState(null)
   const [alerts, setAlerts] = useState([])
+  const autoProcessedGroups = useRef(new Set())
 
   useEffect(() => {
     loadAll()
@@ -65,6 +67,41 @@ export default function App() {
     const interval = setInterval(checkAlerts, 60000)
     return () => clearInterval(interval)
   }, [matches])
+
+  // Auto-guardar clasificados de grupos totalmente bloqueados para el usuario actual
+  useEffect(() => {
+    if (!currentUser || loading || !matches.length || !predictions.length) return
+    const groupMatchesByGroup = {}
+    matches.filter(m => m.stage === 'group').forEach(m => {
+      if (!groupMatchesByGroup[m.group_name]) groupMatchesByGroup[m.group_name] = []
+      groupMatchesByGroup[m.group_name].push(m)
+    })
+    const predsMap = {}
+    predictions.filter(p => p.participant_id === currentUser.id).forEach(p => {
+      predsMap[p.match_id] = { home: p.predicted_home, away: p.predicted_away }
+    })
+    Object.entries(groupMatchesByGroup).forEach(async ([group, gMatches]) => {
+      const todosBloqueados = gMatches.length > 0 && gMatches.every(m => isMatchLocked(m.match_date) || m.is_finished)
+      if (!todosBloqueados) return
+      const yaSaved = groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group)
+      if (yaSaved) return
+      const cacheKey = `${currentUser.id}_${group}`
+      if (autoProcessedGroups.current.has(cacheKey)) return
+      if (!grupoCompleto(gMatches, predsMap)) return
+      autoProcessedGroups.current.add(cacheKey)
+      const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
+      const tabla = calcularTablaGrupo(teams, gMatches, predsMap)
+      await supabase.from('group_order_picks').insert({
+        participant_id: currentUser.id,
+        group_name: group,
+        first_place: tabla[0].team,
+        second_place: tabla[1].team,
+        third_place: tabla[2]?.team || '',
+        fourth_place: tabla[3]?.team || '',
+      })
+      loadGroupOrder()
+    })
+  }, [currentUser, matches, predictions, groupOrderPicks, loading])
 
   async function loadAll() {
     setLoading(true)
