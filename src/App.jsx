@@ -68,7 +68,7 @@ export default function App() {
     return () => clearInterval(interval)
   }, [matches])
 
-  // Auto-guardar clasificados de grupos totalmente bloqueados para el usuario actual
+  // Auto-guardar clasificados de grupos totalmente finalizados para el usuario actual
   useEffect(() => {
     if (!currentUser || loading || !matches.length) return
     const groupMatchesByGroup = {}
@@ -85,9 +85,6 @@ export default function App() {
       if (!todosFinalizados) return
       const yaSaved = groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group)
       if (yaSaved) return
-      const cacheKey = `${currentUser.id}_${group}`
-      if (autoProcessedGroups.current.has(cacheKey)) return
-      autoProcessedGroups.current.add(cacheKey)
       // Completar predicciones faltantes con 0-0 para poder calcular tabla
       const predsMapCompleto = { ...predsMap }
       gMatches.forEach(m => {
@@ -95,7 +92,7 @@ export default function App() {
       })
       const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
       const tabla = calcularTablaGrupo(teams, gMatches, predsMapCompleto)
-      await supabase.from('group_order_picks').insert({
+      const { error } = await supabase.from('group_order_picks').insert({
         participant_id: currentUser.id,
         group_name: group,
         first_place: tabla[0].team,
@@ -103,7 +100,7 @@ export default function App() {
         third_place: tabla[2]?.team || '',
         fourth_place: tabla[3]?.team || '',
       })
-      loadGroupOrder()
+      if (!error) loadGroupOrder()
     })
   }, [currentUser, matches, predictions, groupOrderPicks, loading])
 
