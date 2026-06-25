@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase, calcularPuntos, isMatchLocked } from '../lib/supabase.js'
 import { calcularTablaGrupo } from '../lib/groupTable.js'
+
+const CLASSIFIED_STORAGE_KEY = 'mundial2026_classified_answers'
 
 export default function AdminPanel({ matches, participants, scoringConfig, appConfig, predictions, groupOrderPicks, topScorerPicks, onRefresh, notify }) {
   const [scores, setScores]     = useState({})
@@ -11,9 +13,16 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const [newName, setNewName]   = useState('')
   const [topScorerAnswer, setTopScorerAnswer] = useState(appConfig?.top_scorer_answer || '')
   const [showFinished, setShowFinished] = useState(false)
-  const [classifiedAnswers, setClassifiedAnswers] = useState({})
+  const [classifiedAnswers, setClassifiedAnswers] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(CLASSIFIED_STORAGE_KEY) || '{}') } catch { return {} }
+  })
   const [savingClassified, setSavingClassified] = useState(false)
   const [savingMassive, setSavingMassive] = useState(false)
+
+  // Auto-guardar en localStorage cada vez que cambian los clasificados
+  useEffect(() => {
+    localStorage.setItem(CLASSIFIED_STORAGE_KEY, JSON.stringify(classifiedAnswers))
+  }, [classifiedAnswers])
 
   async function saveResult(matchId) {
     const match = matches.find(m => m.id === matchId)
