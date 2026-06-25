@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase, ADMIN_EMAIL, ADMIN_PASSWORD, calcularPuntos, isMatchLocked, formatDateColombia } from '../lib/supabase.js'
 import { calcularTablaGrupo, grupoCompleto } from '../lib/groupTable.js'
 
@@ -38,6 +38,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
   const [activeGroup, setActiveGroup] = useState('A')
   const [groupConfirm, setGroupConfirm] = useState(null)
   const [savingGroup, setSavingGroup] = useState(false)
+  const autoProcessedGroups = useRef(new Set())
   const showPass = email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
 
   useEffect(() => {
@@ -50,6 +51,41 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
     const ts = topScorerPicks.find(t => t.participant_id === currentUser.id)
     if (ts) setTopScorer(ts.player_name)
   }, [currentUser, predictions, topScorerPicks])
+
+  // Auto-guardar clasificados de grupos totalmente bloqueados sin intervención del usuario
+  useEffect(() => {
+    if (!currentUser || !matches.length || !predictions.length) return
+    const groupMatchesByGroup = {}
+    matches.filter(m => m.stage === 'group').forEach(m => {
+      if (!groupMatchesByGroup[m.group_name]) groupMatchesByGroup[m.group_name] = []
+      groupMatchesByGroup[m.group_name].push(m)
+    })
+    const predsMap = {}
+    predictions.filter(p => p.participant_id === currentUser.id).forEach(p => {
+      predsMap[p.match_id] = { home: p.predicted_home, away: p.predicted_away }
+    })
+    Object.entries(groupMatchesByGroup).forEach(async ([group, gMatches]) => {
+      const todosBloqueados = gMatches.length > 0 && gMatches.every(m => isMatchLocked(m.match_date) || m.is_finished)
+      if (!todosBloqueados) return
+      const yaSaved = groupOrderPicks && groupOrderPicks.find && groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group)
+      if (yaSaved) return
+      if (autoProcessedGroups.current.has(group)) return
+      if (!grupoCompleto(gMatches, predsMap)) return
+      autoProcessedGroups.current.add(group)
+      const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
+      const tabla = calcularTablaGrupo(teams, gMatches, predsMap)
+      const data = {
+        participant_id: currentUser.id,
+        group_name: group,
+        first_place: tabla[0].team,
+        second_place: tabla[1].team,
+        third_place: tabla[2]?.team || '',
+        fourth_place: tabla[3]?.team || '',
+      }
+      await supabase.from('group_order_picks').insert(data)
+      onRefresh()
+    })
+  }, [currentUser, matches, predictions, groupOrderPicks])
 
   async function handleLogin() {
     if (!email.trim()) return notify('Ingresa tu email', 'error')
@@ -454,6 +490,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
             {GROUPS.map(group => {
               const gMatches = groupMatches.filter(m => m.group_name === group)
               const isComplete = grupoCompleto(gMatches, localPreds)
+              const todosBloqueados = gMatches.length > 0 && gMatches.every(m => isMatchLocked(m.match_date) || m.is_finished)
               const savedPick = groupOrderPicks ? groupOrderPicks.find ? groupOrderPicks.find(g => g.participant_id === currentUser.id && g.group_name === group) : null : null
               return (
                 <div key={group} style={{ background:'var(--glass)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'18px', boxShadow:'var(--shadow)' }}>
@@ -467,7 +504,7 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
                     }
                   </div>
                   {savedPick && (
-                    <div style={{ marginBottom:12 }}>
+                    <div style={{ marginBottom: todosBloqueados ? 0 : 12 }}>
                       {[savedPick.first_place, savedPick.second_place, savedPick.third_place, savedPick.fourth_place].map((team, i) => (
                         <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', background: i<2?'rgba(0,48,135,0.06)':'#f8fafc', borderRadius:6, marginBottom:4, border: i<2?'1px solid rgba(0,48,135,0.15)':'1px solid #e2e8f0' }}>
                           <span style={{ fontFamily:'var(--font-d)', fontSize:16, color: i<2?'var(--blue)':'var(--text3)', width:16, textAlign:'center' }}>{i+1}</span>
@@ -478,9 +515,11 @@ export default function MyPicks({ currentUser, matches, predictions, groupOrderP
                       ))}
                     </div>
                   )}
-                  <button onClick={() => calcularYConfirmar(group)} disabled={!isComplete} style={{ width:'100%', background: isComplete ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0', color: isComplete ? 'var(--gold)' : 'var(--text3)', border:'none', borderRadius:8, padding:'10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, letterSpacing:1, cursor: isComplete?'pointer':'not-allowed', transition:'all 0.2s', opacity: isComplete?1:0.6 }}>
-                    {savedPick ? '🔄 RECALCULAR' : isComplete ? '📊 VER MIS CLASIFICADOS' : 'Completa los marcadores primero'}
-                  </button>
+                  {!(todosBloqueados && savedPick) && (
+                    <button onClick={() => calcularYConfirmar(group)} disabled={!isComplete} style={{ width:'100%', background: isComplete ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0', color: isComplete ? 'var(--gold)' : 'var(--text3)', border:'none', borderRadius:8, padding:'10px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, letterSpacing:1, cursor: isComplete?'pointer':'not-allowed', transition:'all 0.2s', opacity: isComplete?1:0.6 }}>
+                      {savedPick ? '🔄 RECALCULAR' : isComplete ? '📊 VER MIS CLASIFICADOS' : 'Completa los marcadores primero'}
+                    </button>
+                  )}
                 </div>
               )
             })}

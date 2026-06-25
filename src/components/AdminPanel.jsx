@@ -10,6 +10,8 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const [newName, setNewName]   = useState('')
   const [topScorerAnswer, setTopScorerAnswer] = useState(appConfig?.top_scorer_answer || '')
   const [showFinished, setShowFinished] = useState(false)
+  const [classifiedAnswers, setClassifiedAnswers] = useState({})
+  const [savingClassified, setSavingClassified] = useState(false)
 
   async function saveResult(matchId) {
     const match = matches.find(m => m.id === matchId)
@@ -137,9 +139,54 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const pendingMatches = matches.filter(m => !m.is_finished && m.stage === 'group')
   const finishedMatches = matches.filter(m => m.is_finished && m.stage === 'group')
   const nonAdminParticipants = participants.filter(p => !p.is_admin)
+  const GROUPS = [...new Set(matches.filter(m => m.stage === 'group').map(m => m.group_name))].sort()
+
+  async function calcularPuntosClasificados() {
+    // Validar que todos los grupos tengan los 4 puestos ingresados
+    const gruposFaltantes = GROUPS.filter(g =>
+      !classifiedAnswers[g]?.first || !classifiedAnswers[g]?.second ||
+      !classifiedAnswers[g]?.third || !classifiedAnswers[g]?.fourth
+    )
+    if (gruposFaltantes.length > 0) {
+      return notify(`Faltan equipos en los grupos: ${gruposFaltantes.join(', ')}`, 'error')
+    }
+    if (!confirm(`¿Calcular puntos de clasificados para todos los participantes?\n\nReglas:\n• +${scoringConfig.classified_team_points} pt por cada equipo acertado en el top 2\n• +${scoringConfig.group_order_points} pts si el orden de los 4 es exacto\n\nEsta acción puede repetirse si hay correcciones.`)) return
+
+    setSavingClassified(true)
+    const nonAdmin = participants.filter(p => !p.is_admin)
+
+    for (const p of nonAdmin) {
+      const misClasificados = groupOrderPicks.filter(g => g.participant_id === p.id)
+      for (const pick of misClasificados) {
+        const real = classifiedAnswers[pick.group_name]
+        if (!real?.first || !real?.second || !real?.third || !real?.fourth) continue
+
+        const realOrden = [real.first.trim(), real.second.trim(), real.third.trim(), real.fourth.trim()]
+        const predOrden = [pick.first_place?.trim(), pick.second_place?.trim(), pick.third_place?.trim(), pick.fourth_place?.trim()]
+        const realTop2 = realOrden.slice(0, 2)
+
+        // 1 pt por cada equipo del top 2 real que el participante tenga en su propio top 2 (sin importar posición)
+        let pts = 0
+        predOrden.slice(0, 2).forEach(team => {
+          if (team && realTop2.includes(team)) pts += scoringConfig.classified_team_points
+        })
+
+        // 5 pts si el orden exacto de los 4 coincide
+        const ordenExacto = predOrden.every((team, i) => team && team === realOrden[i])
+        if (ordenExacto) pts += scoringConfig.group_order_points
+
+        await supabase.from('group_order_picks').update({ points_earned: pts }).eq('id', pick.id)
+      }
+    }
+
+    setSavingClassified(false)
+    onRefresh()
+    notify('✅ Puntos de clasificados calculados para todos los participantes')
+  }
 
   const ADMIN_TABS = [
     { id:'results',      label:'⚽ Resultados' },
+    { id:'classified',   label:'📊 Clasificados' },
     { id:'participants', label:'👥 Jugadores' },
     { id:'scorer',       label:'👟 Goleador' },
     { id:'tools',        label:'🧹 Pruebas' },
@@ -245,6 +292,89 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
               <button onClick={activateKnockout} style={{ background:'linear-gradient(135deg,var(--blue),var(--blue-dark))', color:'var(--gold)', border:'none', borderRadius:'var(--r-sm)', padding:'12px 24px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:14, letterSpacing:2, cursor:'pointer', textTransform:'uppercase' }}>
                 🔥 ACTIVAR ELIMINATORIA
               </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* CLASIFICADOS */}
+      {adminTab === 'classified' && (
+        <div>
+          <div style={{ background:'rgba(0,48,135,0.06)', border:'1px solid rgba(0,48,135,0.2)', borderRadius:'var(--r)', padding:'14px 18px', marginBottom:20 }}>
+            <p style={{ fontSize:13, color:'var(--text2)', lineHeight:1.6 }}>
+              📊 Ingresa el <strong>orden real final de los 4 equipos</strong> de cada grupo. Al calcular:<br/>
+              <strong>+{scoringConfig.classified_team_points} pt</strong> por cada equipo acertado en el top 2 (sin importar posición) ·
+              <strong> +{scoringConfig.group_order_points} pts</strong> si el orden de los <strong>4 equipos es exacto</strong> (1ro=1ro, 2do=2do, 3ro=3ro, 4to=4to)
+            </p>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))', gap:12, marginBottom:24 }}>
+            {GROUPS.map(group => {
+              const ans = classifiedAnswers[group] || {}
+              const gMatches = matches.filter(m => m.group_name === group && m.stage === 'group')
+              const teams = [...new Set([...gMatches.map(m => m.home_team), ...gMatches.map(m => m.away_team)])]
+              const allFinished = gMatches.length > 0 && gMatches.every(m => m.is_finished)
+              return (
+                <div key={group} style={{ background:'var(--glass)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'16px', boxShadow:'var(--shadow)' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+                    <span style={{ fontFamily:'var(--font-o)', fontSize:15, fontWeight:700, color:'var(--blue)', letterSpacing:2 }}>GRUPO {group}</span>
+                    {allFinished
+                      ? <span style={{ fontSize:10, background:'#dcfce7', color:'#16a34a', borderRadius:4, padding:'2px 7px', fontFamily:'var(--font-c)', fontWeight:700 }}>✓ Finalizado</span>
+                      : <span style={{ fontSize:10, background:'#fef9c3', color:'#ca8a04', borderRadius:4, padding:'2px 7px', fontFamily:'var(--font-c)', fontWeight:700 }}>En curso</span>
+                    }
+                  </div>
+                  <div style={{ display:'grid', gap:6 }}>
+                    {[
+                      ['first',  '🥇 1er lugar — Clasifica'],
+                      ['second', '🥈 2do lugar — Clasifica'],
+                      ['third',  '3ro lugar'],
+                      ['fourth', '4to lugar'],
+                    ].map(([key, label], i) => (
+                      <div key={key}>
+                        <div style={{ fontSize:10, color: i < 2 ? 'var(--blue)' : 'var(--text3)', fontFamily:'var(--font-c)', letterSpacing:1, marginBottom:4, fontWeight: i < 2 ? 700 : 400 }}>{label}</div>
+                        <select
+                          value={ans[key] || ''}
+                          onChange={e => setClassifiedAnswers(prev => ({ ...prev, [group]: { ...prev[group], [key]: e.target.value } }))}
+                          style={{ width:'100%', background:'#f8fafc', border:`1px solid ${ans[key] ? (i < 2 ? 'rgba(0,48,135,0.4)' : 'rgba(0,0,0,0.2)') : 'var(--border)'}`, color:'var(--text)', padding:'8px 10px', borderRadius:8, fontFamily:'var(--font-c)', fontWeight: i < 2 ? 700 : 400, fontSize:13, outline:'none', cursor:'pointer' }}
+                        >
+                          <option value=''>— Seleccionar equipo —</option>
+                          {teams.sort().map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <button
+            onClick={calcularPuntosClasificados}
+            disabled={savingClassified}
+            style={{ width:'100%', background: savingClassified ? '#e2e8f0' : 'linear-gradient(135deg,var(--blue),var(--blue-dark))', color: savingClassified ? 'var(--text3)' : 'var(--gold)', border:'none', borderRadius:'var(--r)', padding:'15px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:15, letterSpacing:2, cursor: savingClassified ? 'not-allowed' : 'pointer', textTransform:'uppercase', transition:'all 0.2s' }}
+          >
+            {savingClassified ? 'Calculando...' : '📊 CALCULAR PUNTOS DE CLASIFICADOS'}
+          </button>
+
+          {/* Resumen de picks por grupo */}
+          {groupOrderPicks.length > 0 && (
+            <div style={{ marginTop:24 }}>
+              <h4 style={{ fontFamily:'var(--font-c)', fontSize:12, letterSpacing:2, color:'var(--text3)', textTransform:'uppercase', marginBottom:12 }}>Picks registrados por los participantes</h4>
+              <div style={{ display:'grid', gap:6 }}>
+                {participants.filter(p => !p.is_admin).map(p => {
+                  const picks = groupOrderPicks.filter(g => g.participant_id === p.id)
+                  const totalPts = picks.reduce((acc, g) => acc + (g.points_earned || 0), 0)
+                  return (
+                    <div key={p.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:'#f8fafc', borderRadius:'var(--r-sm)', border:'1px solid var(--border)' }}>
+                      <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13 }}>{p.name}</span>
+                      <span style={{ fontSize:12, color:'var(--text3)' }}>{picks.length} grupos confirmados</span>
+                      <span style={{ fontFamily:'var(--font-d)', fontSize:20, color: totalPts > 0 ? 'var(--blue)' : 'var(--text3)', minWidth:60, textAlign:'right' }}>
+                        {totalPts > 0 ? `+${totalPts} pts` : '—'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </div>
