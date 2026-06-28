@@ -18,6 +18,9 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   })
   const [savingClassified, setSavingClassified] = useState(false)
   const [savingMassive, setSavingMassive] = useState(false)
+  const [knockoutScores, setKnockoutScores] = useState({})
+  const [savingKnockout, setSavingKnockout] = useState({})
+  const [resettingKnockout, setResettingKnockout] = useState({})
 
   // Auto-guardar en localStorage cada vez que cambian los clasificados
   useEffect(() => {
@@ -147,6 +150,85 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
     notify('✅ Fase eliminatoria activada')
   }
 
+  // Mapa de bracket: qué partido recibe al ganador de un partido dado
+  // Formato: { matchId: { nextMatchId, slot: 'home'|'away' } }
+  // Esto se calcula dinámicamente basándose en el campo bracket_slot de cada partido
+  async function saveKnockoutResult(matchId) {
+    const match = matches.find(m => m.id === matchId)
+    const s = knockoutScores[matchId]
+    const homeRaw = s?.home ?? match?.home_score
+    const awayRaw = s?.away ?? match?.away_score
+    if (homeRaw === undefined || homeRaw === null || awayRaw === undefined || awayRaw === null)
+      return notify('Ingresa los dos marcadores', 'warning')
+    if (parseInt(homeRaw) === parseInt(awayRaw))
+      return notify('⚠️ En eliminatoria no puede haber empate — define un ganador', 'warning')
+
+    setSavingKnockout(sv => ({ ...sv, [matchId]: true }))
+    const homeScore = parseInt(homeRaw)
+    const awayScore = parseInt(awayRaw)
+    const winner = homeScore > awayScore ? match.home_team : match.away_team
+    const winnerFlag = homeScore > awayScore ? match.home_flag : match.away_flag
+
+    // 1. Guardar resultado
+    await supabase.from('matches').update({ home_score: homeScore, away_score: awayScore, is_finished: true }).eq('id', matchId)
+
+    // 2. Predicciones — mismo flujo que fase de grupos
+    const { data: preds } = await supabase.from('predictions').select('*').eq('match_id', matchId)
+    const predParticipantIds = (preds || []).map(p => p.participant_id)
+    const sinPrediccion = participants.filter(p => !p.is_admin && !predParticipantIds.includes(p.id))
+    for (const p of sinPrediccion) {
+      await supabase.from('predictions').upsert({
+        participant_id: p.id, match_id: matchId,
+        predicted_home: 0, predicted_away: 0, is_locked: false, points_earned: 1
+      }, { onConflict: 'participant_id,match_id' })
+    }
+    if (preds) {
+      for (const pred of preds) {
+        const hasPrediction = pred.is_locked === true || (pred.predicted_home !== 0 || pred.predicted_away !== 0)
+        const pts = calcularPuntos(pred.predicted_home, pred.predicted_away, homeScore, awayScore, scoringConfig, hasPrediction)
+        await supabase.from('predictions').update({ points_earned: pts }).eq('id', pred.id)
+      }
+    }
+
+    // 3. Auto-avance: si el partido tiene next_match_id y next_slot, actualizar el siguiente partido
+    if (match.next_match_id && match.next_slot) {
+      const updateField = match.next_slot === 'home'
+        ? { home_team: winner, home_flag: winnerFlag }
+        : { away_team: winner, away_flag: winnerFlag }
+      await supabase.from('matches').update(updateField).eq('id', match.next_match_id)
+    }
+
+    setSavingKnockout(sv => ({ ...sv, [matchId]: false }))
+    setKnockoutScores(s => { const n={...s}; delete n[matchId]; return n })
+    onRefresh()
+    const advance = match.next_match_id ? ` · ${winner} avanza al siguiente partido 🚀` : ''
+    notify(`✅ Resultado guardado — puntos recalculados${advance}`)
+  }
+
+  async function resetKnockoutResult(matchId, homeName, awayName) {
+    if (!confirm(`¿Resetear el resultado de ${homeName} vs ${awayName}?\n\nEsto borrará el marcador y revertirá los puntos.`)) return
+    setResettingKnockout(r => ({ ...r, [matchId]: true }))
+    const match = matches.find(m => m.id === matchId)
+    await supabase.from('matches').update({ home_score: null, away_score: null, is_finished: false }).eq('id', matchId)
+    await supabase.from('predictions').delete().eq('match_id', matchId).eq('predicted_home', 0).eq('predicted_away', 0).eq('is_locked', false)
+    const { data: preds } = await supabase.from('predictions').select('*').eq('match_id', matchId)
+    if (preds) {
+      for (const pred of preds) {
+        await supabase.from('predictions').update({ points_earned: 0 }).eq('id', pred.id)
+      }
+    }
+    // Limpiar el equipo avanzado en el siguiente partido si aplica
+    if (match?.next_match_id && match?.next_slot) {
+      const clearField = match.next_slot === 'home'
+        ? { home_team: 'Por definir', home_flag: '❓' }
+        : { away_team: 'Por definir', away_flag: '❓' }
+      await supabase.from('matches').update(clearField).eq('id', match.next_match_id)
+    }
+    setResettingKnockout(r => ({ ...r, [matchId]: false }))
+    onRefresh()
+    notify('🔄 Partido eliminatorio reseteado')
+  }
+
   const pendingMatches = matches.filter(m => !m.is_finished && m.stage === 'group')
   const finishedMatches = matches.filter(m => m.is_finished && m.stage === 'group')
   const nonAdminParticipants = participants.filter(p => !p.is_admin)
@@ -243,7 +325,8 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   }
 
   const ADMIN_TABS = [
-    { id:'results',      label:'⚽ Resultados' },
+    { id:'results',      label:'⚽ Grupos' },
+    { id:'knockout',     label:'🔥 Eliminatoria' },
     { id:'classified',   label:'📊 Clasificados' },
     { id:'participants', label:'👥 Jugadores' },
     { id:'scorer',       label:'👟 Goleador' },
@@ -354,6 +437,123 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
           )}
         </div>
       )}
+
+      {/* ELIMINATORIA */}
+      {adminTab === 'knockout' && (() => {
+        const STAGE_ORDER = ['r16', 'quarter', 'semi', 'third', 'final']
+        const STAGE_LABELS = { r16:'16avos de Final', quarter:'Cuartos de Final', semi:'Semifinales', third:'Tercer Puesto', final:'Gran Final' }
+        const STAGE_ICONS = { r16:'⚔️', quarter:'🏟️', semi:'🌟', third:'🥉', final:'🏆' }
+        const knockoutMatches = matches.filter(m => m.stage !== 'group')
+        const availableStages = STAGE_ORDER.filter(s => knockoutMatches.some(m => m.stage === s))
+        return (
+          <div>
+            <div style={{ background:'rgba(255,107,0,0.07)', border:'1px solid rgba(255,107,0,0.2)', borderRadius:'var(--r)', padding:'14px 18px', marginBottom:20 }}>
+              <p style={{ fontSize:13, color:'var(--text2)', lineHeight:1.6 }}>
+                🔥 <strong>Resultados eliminatorios:</strong> Al guardar se recalculan puntos y el ganador pasa automáticamente al siguiente partido.<br/>
+                ⚠️ No puede haber empate en fase eliminatoria — el marcador debe tener un ganador claro.
+              </p>
+            </div>
+
+            {availableStages.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'40px 20px', color:'var(--text3)', fontFamily:'var(--font-c)' }}>
+                <div style={{ fontSize:48, marginBottom:12 }}>📭</div>
+                <p>No hay partidos eliminatorios cargados aún.</p>
+                <p style={{ fontSize:12, marginTop:8 }}>Agrégalos directamente en Supabase con stage = 'r16', 'quarter', 'semi', 'third' o 'final'.</p>
+              </div>
+            ) : (
+              availableStages.map(stage => {
+                const stageMatches = knockoutMatches.filter(m => m.stage === stage)
+                const pendingStage = stageMatches.filter(m => !m.is_finished)
+                const finishedStage = stageMatches.filter(m => m.is_finished)
+                return (
+                  <div key={stage} style={{ marginBottom:28 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+                      <span style={{ fontSize:20 }}>{STAGE_ICONS[stage]}</span>
+                      <h4 style={{ fontFamily:'var(--font-o)', fontSize:16, fontWeight:700, color:'var(--blue)', letterSpacing:2, textTransform:'uppercase' }}>{STAGE_LABELS[stage]}</h4>
+                      <span style={{ fontSize:11, background: finishedStage.length===stageMatches.length?'#dcfce7':'#fef9c3', color: finishedStage.length===stageMatches.length?'#16a34a':'#ca8a04', borderRadius:4, padding:'2px 8px', fontFamily:'var(--font-c)', fontWeight:700 }}>
+                        {finishedStage.length}/{stageMatches.length} finalizados
+                      </span>
+                    </div>
+
+                    {/* Pending */}
+                    {pendingStage.length > 0 && (
+                      <div style={{ display:'grid', gap:8, marginBottom:10 }}>
+                        {pendingStage.map(match => {
+                          const s = knockoutScores[match.id] || {}
+                          const isPorDefinir = !match.home_team || match.home_team === 'Por definir'
+                          const isAwayPorDefinir = !match.away_team || match.away_team === 'Por definir'
+                          return (
+                            <div key={match.id} style={{ background:'var(--glass)', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', padding:'12px 16px', display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', boxShadow:'var(--shadow)' }}>
+                              <div style={{ flex:1, minWidth:160 }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                                  <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:14, color: isPorDefinir?'var(--text3)':'var(--text)' }}>{isPorDefinir?'Por definir':match.home_team}</span>
+                                  <span style={{ color:'var(--text3)', fontSize:12 }}>vs</span>
+                                  <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:14, color: isAwayPorDefinir?'var(--text3)':'var(--text)' }}>{isAwayPorDefinir?'Por definir':match.away_team}</span>
+                                </div>
+                                <div style={{ fontSize:11, color:'var(--text3)', fontFamily:'var(--font-c)', marginTop:2 }}>
+                                  {match.match_date ? new Date(match.match_date).toLocaleString('es-CO', { timeZone:'America/Bogota', weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' }) : 'Fecha por definir'}
+                                </div>
+                              </div>
+                              {!isPorDefinir && !isAwayPorDefinir ? (
+                                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                  <input type="number" min="0" max="30" value={s.home??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],home:e.target.value}}))} placeholder="0"
+                                    style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
+                                  <span style={{ color:'var(--text3)', fontFamily:'var(--font-d)', fontSize:18 }}>—</span>
+                                  <input type="number" min="0" max="30" value={s.away??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],away:e.target.value}}))} placeholder="0"
+                                    style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
+                                  <button onClick={() => saveKnockoutResult(match.id)} disabled={savingKnockout[match.id]||s.home===undefined||s.away===undefined}
+                                    style={{ background:'#16a34a', color:'#fff', border:'none', borderRadius:6, padding:'8px 16px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:1, cursor:'pointer', opacity:(s.home!==undefined&&s.away!==undefined)?1:0.4, transition:'all 0.2s', whiteSpace:'nowrap' }}>
+                                    {savingKnockout[match.id] ? '...' : '✅ GUARDAR'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <span style={{ fontSize:12, color:'var(--text3)', fontFamily:'var(--font-c)', fontStyle:'italic' }}>Esperando equipos...</span>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {/* Finished with edit option */}
+                    {finishedStage.length > 0 && (
+                      <div style={{ display:'grid', gap:6 }}>
+                        {finishedStage.map(m => {
+                          const s = knockoutScores[m.id] || {}
+                          const homeVal = s.home ?? m.home_score
+                          const awayVal = s.away ?? m.away_score
+                          const changed = parseInt(homeVal) !== m.home_score || parseInt(awayVal) !== m.away_score
+                          const winner = m.home_score > m.away_score ? m.home_team : m.away_team
+                          return (
+                            <div key={m.id} style={{ background:'rgba(22,163,74,0.04)', border:'1px solid rgba(22,163,74,0.2)', borderRadius:'var(--r-sm)', padding:'10px 16px', display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                              <span style={{ fontSize:10, background:'#dcfce7', borderRadius:4, padding:'2px 6px', color:'#16a34a', fontFamily:'var(--font-c)', fontWeight:700 }}>✅ {STAGE_LABELS[m.stage]}</span>
+                              <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1, minWidth:100, color: winner===m.home_team?'#16a34a':'var(--text)' }}>{m.home_team}{winner===m.home_team?' 🏆':''}</span>
+                              <input type="number" min="0" max="30" value={homeVal} onChange={e=>setKnockoutScores(sc=>({...sc,[m.id]:{...sc[m.id],home:e.target.value}}))}
+                                style={{ width:46, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', padding:'6px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:18, outline:'none' }} />
+                              <span style={{ color:'var(--text3)', fontFamily:'var(--font-d)', fontSize:16 }}>—</span>
+                              <input type="number" min="0" max="30" value={awayVal} onChange={e=>setKnockoutScores(sc=>({...sc,[m.id]:{...sc[m.id],away:e.target.value}}))}
+                                style={{ width:46, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', padding:'6px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:18, outline:'none' }} />
+                              <span style={{ fontFamily:'var(--font-c)', fontWeight:700, fontSize:13, flex:1, minWidth:100, textAlign:'right', color: winner===m.away_team?'#16a34a':'var(--text)' }}>{winner===m.away_team?'🏆 ':''}{m.away_team}</span>
+                              <button onClick={() => saveKnockoutResult(m.id)} disabled={savingKnockout[m.id] || !changed}
+                                style={{ background: changed ? '#16a34a' : '#e2e8f0', color: changed ? '#fff' : 'var(--text3)', border:'none', borderRadius:6, padding:'6px 12px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:11, letterSpacing:1, cursor: changed?'pointer':'not-allowed', whiteSpace:'nowrap', transition:'all 0.2s' }}>
+                                {savingKnockout[m.id] ? '...' : '💾 RECALCULAR'}
+                              </button>
+                              <button onClick={() => resetKnockoutResult(m.id, m.home_team, m.away_team)} disabled={resettingKnockout[m.id]}
+                                style={{ background:'#fee2e2', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:6, padding:'6px 9px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:11, letterSpacing:1, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.2s' }}>
+                                {resettingKnockout[m.id] ? '...' : '🔄'}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+        )
+      })()}
 
       {/* CLASIFICADOS */}
       {adminTab === 'classified' && (
