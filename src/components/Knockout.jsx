@@ -147,7 +147,20 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
 
   const isAdminUser = currentUser.email === ADMIN_EMAIL
   const availableStages = STAGE_ORDER.filter(s => knockoutMatches.some(m => m.stage === s))
-  const stageMatches = knockoutMatches.filter(m => m.stage === activeStage)
+  const stageMatches = [...knockoutMatches.filter(m => m.stage === activeStage)].sort((a, b) => {
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const tomorrow = new Date(today.getTime() + 86400000)
+    const aDate = new Date(a.match_date)
+    const bDate = new Date(b.match_date)
+    const aIsToday = aDate >= today && aDate < tomorrow
+    const bIsToday = bDate >= today && bDate < tomorrow
+    if (aIsToday && !bIsToday) return -1
+    if (!aIsToday && bIsToday) return 1
+    if (!a.is_finished && b.is_finished) return -1
+    if (a.is_finished && !b.is_finished) return 1
+    return aDate - bDate
+  })
 
   // Total knockout points
   const myKnockoutPoints = predictions
