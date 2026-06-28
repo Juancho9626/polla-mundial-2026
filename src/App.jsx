@@ -276,7 +276,7 @@ export default function App() {
           {tab === 'leaderboard' && <Leaderboard leaderboard={leaderboard} currentUser={currentUser} scoringConfig={scoringConfig} />}
           {tab === 'matches'     && <Matches matches={matches} predictions={predictions} currentUser={currentUser} formatDate={formatDateColombia} isLocked={isMatchLocked} />}
           {tab === 'picks'       && <MyPicks currentUser={currentUser} matches={matches} predictions={predictions} groupOrderPicks={groupOrderPicks} topScorerPicks={topScorerPicks} scoringConfig={scoringConfig} onRefresh={loadAll} notify={notify} loginUser={loginUser} participants={participants} />}
-          {tab === 'knockout'    && <Knockout currentUser={currentUser} matches={matches} bracketPicks={bracketPicks} appConfig={appConfig} scoringConfig={scoringConfig} onRefresh={loadAll} notify={notify} />}
+          {tab === 'knockout'    && <Knockout currentUser={currentUser} matches={matches} predictions={predictions} bracketPicks={bracketPicks} appConfig={appConfig} scoringConfig={scoringConfig} onRefresh={loadAll} notify={notify} loginUser={loginUser} participants={participants} />}
           {tab === 'rules'       && <Rules scoringConfig={scoringConfig} />}
           {tab === 'admin'       && isAdmin && <AdminPanel matches={matches} participants={participants} scoringConfig={scoringConfig} appConfig={appConfig} predictions={predictions} groupOrderPicks={groupOrderPicks} topScorerPicks={topScorerPicks} onRefresh={loadAll} notify={notify} />}
         </div>
