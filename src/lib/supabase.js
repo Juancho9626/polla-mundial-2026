@@ -39,27 +39,58 @@ export function formatDateColombia(dateStr) {
 }
 
 // =============================================
-// SISTEMA DE PUNTOS:
-// 5 pts → Marcador exacto (gana, pierde o empata con marcador preciso)
+// SISTEMA DE PUNTOS (fase de grupos):
+// 5 pts → Marcador exacto
 // 3 pts → Ganador correcto SIN marcador exacto
 // 3 pts → Empate correcto SIN marcador exacto
-// 1 pt  → Sin acierto (participó pero no acertó resultado)
+// 1 pt  → Sin acierto
+//
+// FASE ELIMINATORIA — empates (pasan a penaltis):
+// Se pasa penaltyOpts = { predPenWinner, realPenWinner }
+// Empate exacto    + ganador penales correcto   → 5 pts
+// Empate exacto    + ganador penales incorrecto  → 3 pts
+// Empate no exacto + ganador penales correcto    → 3 pts
+// Empate no exacto + ganador penales incorrecto  → 1 pt
 // =============================================
-// hasPrediction: true si el jugador llenó el marcador, false si quedó 0-0 por defecto
-export function calcularPuntos(predHome, predAway, realHome, realAway, config, hasPrediction = true) {
+// hasPrediction : true si el jugador llenó el marcador, false si quedó 0-0 por defecto
+// penaltyOpts   : { predPenWinner, realPenWinner } — solo para partidos eliminatorios con empate real
+export function calcularPuntos(predHome, predAway, realHome, realAway, config, hasPrediction = true, penaltyOpts = null) {
   if (realHome === null || realAway === null) return 0
   const { exact_score_points, correct_winner_points, no_hit_points } = config
 
-  // Si no había predicción real (quedó 0-0 por defecto), solo da 1 pt sin importar el resultado
+  // Sin predicción real → 1 pt siempre
   if (!hasPrediction) return no_hit_points
 
-  // Marcador exacto (incluye empate exacto)
-  if (predHome === realHome && predAway === realAway) return exact_score_points
+  const isRealDraw    = realHome === realAway
+  const isPredDraw    = predHome === predAway
+  const isExactScore  = predHome === realHome && predAway === realAway
+
+  // --- FASE ELIMINATORIA: empate real con opciones de penaltis ---
+  if (isRealDraw && penaltyOpts) {
+    const { predPenWinner, realPenWinner } = penaltyOpts
+    const correctPen = !!(realPenWinner && predPenWinner && predPenWinner === realPenWinner)
+
+    if (isExactScore) {
+      // Empate exacto + penales correctos → 5 | + penales incorrectos/sin pick → 3
+      return correctPen ? exact_score_points : correct_winner_points
+    }
+    if (isPredDraw) {
+      // Empate no exacto + penales correctos → 3 | + penales incorrectos/sin pick → 1
+      return correctPen ? correct_winner_points : no_hit_points
+    }
+    // Predijo ganador pero fue empate → sin acierto
+    return no_hit_points
+  }
+
+  // --- FLUJO NORMAL (grupos o eliminatoria sin empate real) ---
+
+  // Marcador exacto
+  if (isExactScore) return exact_score_points
 
   const predResult = Math.sign(predHome - predAway)
   const realResult = Math.sign(realHome - realAway)
 
-  // Ganador correcto O empate correcto sin marcador exacto → mismo puntaje
+  // Ganador correcto O empate correcto sin marcador exacto
   if (predResult === realResult) return correct_winner_points
 
   // Sin acierto
