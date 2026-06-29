@@ -19,6 +19,7 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
   const [savingClassified, setSavingClassified] = useState(false)
   const [savingMassive, setSavingMassive] = useState(false)
   const [knockoutScores, setKnockoutScores] = useState({})
+  const [knockoutPenalty, setKnockoutPenalty] = useState({})
   const [savingKnockout, setSavingKnockout] = useState({})
   const [resettingKnockout, setResettingKnockout] = useState({})
 
@@ -160,19 +161,33 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
     const awayRaw = s?.away ?? match?.away_score
     if (homeRaw === undefined || homeRaw === null || awayRaw === undefined || awayRaw === null)
       return notify('Ingresa los dos marcadores', 'warning')
-    if (parseInt(homeRaw) === parseInt(awayRaw))
-      return notify('⚠️ En eliminatoria no puede haber empate — define un ganador', 'warning')
 
-    setSavingKnockout(sv => ({ ...sv, [matchId]: true }))
     const homeScore = parseInt(homeRaw)
     const awayScore = parseInt(awayRaw)
-    const winner = homeScore > awayScore ? match.home_team : match.away_team
-    const winnerFlag = homeScore > awayScore ? match.home_flag : match.away_flag
+    const isDraw = homeScore === awayScore
+    const realPenWinner = isDraw ? (knockoutPenalty[matchId] ?? match?.penalty_winner ?? null) : null
 
-    // 1. Guardar resultado
-    await supabase.from('matches').update({ home_score: homeScore, away_score: awayScore, is_finished: true }).eq('id', matchId)
+    // Empate necesita ganador de penales
+    if (isDraw && !realPenWinner)
+      return notify('⚽ Hay empate — selecciona el ganador en penaltis', 'warning')
 
-    // 2. Predicciones — mismo flujo que fase de grupos
+    setSavingKnockout(sv => ({ ...sv, [matchId]: true }))
+
+    // Ganador: en empate es quien ganó penales
+    const winner = isDraw ? realPenWinner : (homeScore > awayScore ? match.home_team : match.away_team)
+    const winnerFlag = isDraw
+      ? (realPenWinner === match.home_team ? match.home_flag : match.away_flag)
+      : (homeScore > awayScore ? match.home_flag : match.away_flag)
+
+    // 1. Guardar resultado (incluye penalty_winner si hay empate)
+    await supabase.from('matches').update({
+      home_score: homeScore,
+      away_score: awayScore,
+      is_finished: true,
+      ...(isDraw && { penalty_winner: realPenWinner })
+    }).eq('id', matchId)
+
+    // 2. Predicciones con nueva lógica de penaltis
     const { data: preds } = await supabase.from('predictions').select('*').eq('match_id', matchId)
     const predParticipantIds = (preds || []).map(p => p.participant_id)
     const sinPrediccion = participants.filter(p => !p.is_admin && !predParticipantIds.includes(p.id))
@@ -185,12 +200,13 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
     if (preds) {
       for (const pred of preds) {
         const hasPrediction = pred.is_locked === true || (pred.predicted_home !== 0 || pred.predicted_away !== 0)
-        const pts = calcularPuntos(pred.predicted_home, pred.predicted_away, homeScore, awayScore, scoringConfig, hasPrediction)
+        const penaltyOpts = isDraw ? { predPenWinner: pred.predicted_penalty_winner, realPenWinner } : null
+        const pts = calcularPuntos(pred.predicted_home, pred.predicted_away, homeScore, awayScore, scoringConfig, hasPrediction, penaltyOpts)
         await supabase.from('predictions').update({ points_earned: pts }).eq('id', pred.id)
       }
     }
 
-    // 3. Auto-avance: si el partido tiene next_match_id y next_slot, actualizar el siguiente partido
+    // 3. Auto-avance al siguiente partido
     if (match.next_match_id && match.next_slot) {
       const updateField = match.next_slot === 'home'
         ? { home_team: winner, home_flag: winnerFlag }
@@ -199,9 +215,10 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
     }
 
     setSavingKnockout(sv => ({ ...sv, [matchId]: false }))
-    setKnockoutScores(s => { const n={...s}; delete n[matchId]; return n })
+    setKnockoutScores(sc => { const n={...sc}; delete n[matchId]; return n })
+    setKnockoutPenalty(p => { const n={...p}; delete n[matchId]; return n })
     onRefresh()
-    const advance = match.next_match_id ? ` · ${winner} avanza al siguiente partido 🚀` : ''
+    const advance = match.next_match_id ? ` · ${winner} avanza 🚀` : ''
     notify(`✅ Resultado guardado — puntos recalculados${advance}`)
   }
 
@@ -495,16 +512,34 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
                                 </div>
                               </div>
                               {!isPorDefinir && !isAwayPorDefinir ? (
-                                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                  <input type="number" min="0" max="30" value={s.home??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],home:e.target.value}}))} placeholder="0"
-                                    style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
-                                  <span style={{ color:'var(--text3)', fontFamily:'var(--font-d)', fontSize:18 }}>—</span>
-                                  <input type="number" min="0" max="30" value={s.away??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],away:e.target.value}}))} placeholder="0"
-                                    style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
-                                  <button onClick={() => saveKnockoutResult(match.id)} disabled={savingKnockout[match.id]||s.home===undefined||s.away===undefined}
-                                    style={{ background:'#16a34a', color:'#fff', border:'none', borderRadius:6, padding:'8px 16px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:1, cursor:'pointer', opacity:(s.home!==undefined&&s.away!==undefined)?1:0.4, transition:'all 0.2s', whiteSpace:'nowrap' }}>
-                                    {savingKnockout[match.id] ? '...' : '✅ GUARDAR'}
-                                  </button>
+                                <div style={{ display:'flex', flexDirection:'column', gap:8, alignItems:'flex-end' }}>
+                                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                    <input type="number" min="0" max="30" value={s.home??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],home:e.target.value}}))} placeholder="0"
+                                      style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
+                                    <span style={{ color:'var(--text3)', fontFamily:'var(--font-d)', fontSize:18 }}>—</span>
+                                    <input type="number" min="0" max="30" value={s.away??''} onChange={e=>setKnockoutScores(sc=>({...sc,[match.id]:{...sc[match.id],away:e.target.value}}))} placeholder="0"
+                                      style={{ width:52, textAlign:'center', background:'#f8fafc', border:'1px solid var(--border)', color:'var(--text)', padding:'7px 4px', borderRadius:6, fontFamily:'var(--font-d)', fontSize:22, outline:'none' }} />
+                                    <button onClick={() => saveKnockoutResult(match.id)} disabled={savingKnockout[match.id]||s.home===undefined||s.away===undefined}
+                                      style={{ background:'#16a34a', color:'#fff', border:'none', borderRadius:6, padding:'8px 16px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:1, cursor:'pointer', opacity:(s.home!==undefined&&s.away!==undefined)?1:0.4, transition:'all 0.2s', whiteSpace:'nowrap' }}>
+                                      {savingKnockout[match.id] ? '...' : '✅ GUARDAR'}
+                                    </button>
+                                  </div>
+                                  {s.home !== undefined && s.away !== undefined && parseInt(s.home) === parseInt(s.away) && (
+                                    <div style={{ background:'rgba(251,146,60,0.08)', border:'1px solid rgba(251,146,60,0.35)', borderRadius:8, padding:'8px 12px', width:'100%' }}>
+                                      <div style={{ fontSize:11, color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700, letterSpacing:1, marginBottom:6, textTransform:'uppercase' }}>🟡 Empate — ¿Quién gana penales?</div>
+                                      <div style={{ display:'flex', gap:6 }}>
+                                        {[match.home_team, match.away_team].map(team => (
+                                          <button key={team} onClick={() => setKnockoutPenalty(p => ({...p, [match.id]: team}))}
+                                            style={{ flex:1, padding:'6px 8px', borderRadius:6, cursor:'pointer', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, transition:'all 0.2s',
+                                              background: knockoutPenalty[match.id] === team ? '#f97316' : '#f8fafc',
+                                              color: knockoutPenalty[match.id] === team ? '#fff' : 'var(--text2)',
+                                              border: knockoutPenalty[match.id] === team ? '2px solid #ea580c' : '2px solid #e2e8f0' }}>
+                                            {knockoutPenalty[match.id] === team ? '🏆 ' : ''}{team}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               ) : (
                                 <span style={{ fontSize:12, color:'var(--text3)', fontFamily:'var(--font-c)', fontStyle:'italic' }}>Esperando equipos...</span>
