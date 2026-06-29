@@ -457,9 +457,9 @@ export default function AdminPanel({ matches, participants, scoringConfig, appCo
 
       {/* ELIMINATORIA */}
       {adminTab === 'knockout' && (() => {
-        const STAGE_ORDER = ['r16', 'quarter', 'semi', 'third', 'final']
-        const STAGE_LABELS = { r16:'16avos de Final', quarter:'Cuartos de Final', semi:'Semifinales', third:'Tercer Puesto', final:'Gran Final' }
-        const STAGE_ICONS = { r16:'⚔️', quarter:'🏟️', semi:'🌟', third:'🥉', final:'🏆' }
+        const STAGE_ORDER = ['r16', 'r8', 'quarter', 'semi', 'third', 'final']
+        const STAGE_LABELS = { r16:'16avos de Final', r8:'Octavos de Final', quarter:'Cuartos de Final', semi:'Semifinales', third:'Tercer Puesto', final:'Gran Final' }
+        const STAGE_ICONS = { r16:'⚔️', r8:'🔥', quarter:'🏟️', semi:'🌟', third:'🥉', final:'🏆' }
         const knockoutMatches = matches.filter(m => m.stage !== 'group')
         const availableStages = STAGE_ORDER.filter(s => knockoutMatches.some(m => m.stage === s))
         return (
