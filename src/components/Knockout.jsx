@@ -177,7 +177,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
     .reduce((acc, pred) => {
       const match = matches.find(m => m.id === pred.match_id && m.stage !== 'group')
       if (match?.is_finished && match.home_score !== null) {
-        return acc + calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig)
+        return acc + calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: pred.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null))
       }
       return acc
     }, 0)
@@ -364,7 +364,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                       {existing ? 'tu predicción' : 'sin predicción'}
                     </span>
                     {finished && existing && (() => {
-                      const pts = calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig)
+                      const pts = calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: existing.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null))
                       return (
                         <span style={{ marginLeft:10, fontFamily:'var(--font-d)', fontSize:18, color: pts === scoringConfig.exact_score_points ? '#16a34a' : pts === scoringConfig.correct_winner_points ? '#2563eb' : '#64748b', fontWeight:700 }}>
                           +{pts}pts
@@ -387,15 +387,15 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                           <span style={{ fontFamily:'var(--font-c)', fontWeight:700, color:'var(--blue)', fontSize:12 }}>{currentUser.name}</span>
                           <span style={{ fontFamily:'var(--font-d)', fontSize:16, color:'var(--blue)', letterSpacing:2 }}>{existing.predicted_home}-{existing.predicted_away}</span>
                           {existing.predicted_penalty_winner && <span style={{ fontSize:10, color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700 }}>🟡{existing.predicted_penalty_winner}</span>}
-                          {finished && <span style={{ fontSize:11, color: calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig) > 0 ? '#16a34a' : '#dc2626', fontWeight:700 }}>
-                            +{calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig)}pts
+                          {finished && <span style={{ fontSize:11, color: calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: existing.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null)) > 0 ? '#16a34a' : '#dc2626', fontWeight:700 }}>
+                            +{calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: existing.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null))}pts
                           </span>}
                         </div>
                       )}
                       {otherPreds.map(pred => {
                         const player = participants.find(p => p.id === pred.participant_id)
                         if (!player) return null
-                        const pts = finished ? calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig) : null
+                        const pts = finished ? calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: pred.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null)) : null
                         return (
                           <div key={pred.id} style={{ display:'flex', alignItems:'center', gap:5, background:'#f8fafc', border:'1px solid var(--border)', borderRadius:8, padding:'4px 10px', fontSize:13 }}>
                             <div style={{ width:18, height:18, borderRadius:'50%', background:AVATAR_COLORS[participants.indexOf(player)%AVATAR_COLORS.length], display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'#fff', fontWeight:800 }}>{player.name[0]}</div>
@@ -429,7 +429,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                 .reduce((acc, pred) => {
                   const match = stM.find(m => m.id === pred.match_id)
                   if (match?.is_finished && match.home_score !== null) {
-                    return acc + calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig)
+                    return acc + calcularPuntos(pred.predicted_home, pred.predicted_away, match.home_score, match.away_score, scoringConfig, true, (match.home_score === match.away_score ? { predPenWinner: pred.predicted_penalty_winner, realPenWinner: match.penalty_winner } : null))
                   }
                   return acc
                 }, 0)
