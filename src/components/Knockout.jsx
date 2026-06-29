@@ -28,13 +28,14 @@ const AVATAR_COLORS = ['#003087','#4fc3f7','#e63946','#2ec27e','#a78bfa','#fb923
 
 const STAGE_LABELS = {
   r16: '16avos de Final',
+  r8: 'Octavos de Final',
   quarter: 'Cuartos de Final',
   semi: 'Semifinales',
   third: 'Tercer Puesto',
   final: 'Gran Final',
 }
-const STAGE_ORDER = ['r16', 'quarter', 'semi', 'third', 'final']
-const STAGE_ICONS = { r16:'⚔️', quarter:'🏟️', semi:'🌟', third:'🥉', final:'🏆' }
+const STAGE_ORDER = ['r16', 'r8', 'quarter', 'semi', 'third', 'final']
+const STAGE_ICONS = { r16:'⚔️', r8:'🔥', quarter:'🏟️', semi:'🌟', third:'🥉', final:'🏆' }
 
 export default function Knockout({ currentUser, matches, predictions, bracketPicks, appConfig, scoringConfig, onRefresh, notify, loginUser, participants }) {
   const [email, setEmail] = useState('')
