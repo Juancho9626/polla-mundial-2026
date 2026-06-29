@@ -41,6 +41,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [localPreds, setLocalPreds] = useState({})
+  const [localPenalty, setLocalPenalty] = useState({})
   const [savingMatch, setSavingMatch] = useState({})
   const [activeStage, setActiveStage] = useState('r16')
 
@@ -55,10 +56,13 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
   useEffect(() => {
     if (!currentUser) return
     const init = {}
+    const initPenalty = {}
     predictions.filter(p => p.participant_id === currentUser.id).forEach(p => {
       init[p.match_id] = { home: p.predicted_home, away: p.predicted_away }
+      if (p.predicted_penalty_winner) initPenalty[p.match_id] = p.predicted_penalty_winner
     })
     setLocalPreds(init)
+    setLocalPenalty(initPenalty)
   }, [currentUser, predictions])
 
   // Auto-select first stage that has matches
@@ -86,6 +90,10 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
     if (pred?.home === undefined || pred?.away === undefined || pred.home === '' || pred.away === '') {
       return notify('Ingresa ambos marcadores', 'warning')
     }
+    const isDraw = parseInt(pred.home) === parseInt(pred.away)
+    if (isDraw && !localPenalty[matchId]) {
+      return notify('⚽ Hay empate — elige quién gana en penaltis', 'warning')
+    }
     const match = matches.find(m => m.id === matchId)
     const isAdmin = currentUser.email === ADMIN_EMAIL
     if (!isAdmin && isMatchLocked(match?.match_date)) return notify('Este partido ya está bloqueado 🔒', 'warning')
@@ -96,6 +104,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
       match_id: matchId,
       predicted_home: parseInt(pred.home),
       predicted_away: parseInt(pred.away),
+      predicted_penalty_winner: isDraw ? localPenalty[matchId] : null,
       is_locked: true
     }
     const { error } = await supabase.from('predictions').upsert(payload, { onConflict: 'participant_id,match_id' })
@@ -299,23 +308,58 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                     <span style={{ fontSize:12, color:'var(--text3)', fontFamily:'var(--font-c)' }}>⏳ Esperando definición de equipos</span>
                   </div>
                 ) : canEdit ? (
-                  <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, marginTop:10, flexWrap:'wrap' }}>
-                    <input type="number" min="0" max="20" value={local.home??existing?.predicted_home??''} onChange={e=>setLocalPreds(p=>({...p,[match.id]:{...p[match.id],home:e.target.value}}))} placeholder="0" style={scoreInputStyle} />
-                    <span style={{ fontFamily:'var(--font-d)', fontSize:20, color:'var(--text3)' }}>—</span>
-                    <input type="number" min="0" max="20" value={local.away??existing?.predicted_away??''} onChange={e=>setLocalPreds(p=>({...p,[match.id]:{...p[match.id],away:e.target.value}}))} placeholder="0" style={scoreInputStyle} />
-                    <button onClick={() => savePrediction(match.id)} disabled={savingMatch[match.id]} style={{
-                      background: changed||!isSaved ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0',
-                      color: changed||!isSaved ? 'var(--gold)' : 'var(--text3)',
-                      border:'none', borderRadius:8, padding:'10px 16px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:1, cursor:'pointer', transition:'all 0.2s'
-                    }}>
-                      {savingMatch[match.id] ? '...' : isSaved ? (changed ? 'ACTUALIZAR' : '✓ GUARDADO') : 'GUARDAR'}
-                    </button>
+                  <div style={{ marginTop:10 }}>
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, flexWrap:'wrap' }}>
+                      <input type="number" min="0" max="20" value={local.home??existing?.predicted_home??''} onChange={e=>setLocalPreds(p=>({...p,[match.id]:{...p[match.id],home:e.target.value}}))} placeholder="0" style={scoreInputStyle} />
+                      <span style={{ fontFamily:'var(--font-d)', fontSize:20, color:'var(--text3)' }}>—</span>
+                      <input type="number" min="0" max="20" value={local.away??existing?.predicted_away??''} onChange={e=>setLocalPreds(p=>({...p,[match.id]:{...p[match.id],away:e.target.value}}))} placeholder="0" style={scoreInputStyle} />
+                      <button onClick={() => savePrediction(match.id)} disabled={savingMatch[match.id]} style={{
+                        background: changed||!isSaved ? 'linear-gradient(135deg,var(--blue),var(--blue-dark))' : '#e2e8f0',
+                        color: changed||!isSaved ? 'var(--gold)' : 'var(--text3)',
+                        border:'none', borderRadius:8, padding:'10px 16px', fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:1, cursor:'pointer', transition:'all 0.2s'
+                      }}>
+                        {savingMatch[match.id] ? '...' : isSaved ? (changed ? 'ACTUALIZAR' : '✓ GUARDADO') : 'GUARDAR'}
+                      </button>
+                    </div>
+                    {/* Penaltis: aparece solo si hay empate */}
+                    {(() => {
+                      const h = parseInt(local.home ?? existing?.predicted_home ?? -1)
+                      const a = parseInt(local.away ?? existing?.predicted_away ?? -1)
+                      if (isNaN(h) || isNaN(a) || h !== a || h < 0) return null
+                      const penWinner = localPenalty[match.id] || existing?.predicted_penalty_winner
+                      return (
+                        <div style={{ marginTop:10, background:'rgba(251,146,60,0.08)', border:'1px solid rgba(251,146,60,0.3)', borderRadius:10, padding:'10px 14px' }}>
+                          <div style={{ fontSize:11, color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700, letterSpacing:1, textTransform:'uppercase', marginBottom:8, textAlign:'center' }}>
+                            🟡 Empate — ¿Quién gana en penaltis?
+                          </div>
+                          <div style={{ display:'flex', gap:8, justifyContent:'center' }}>
+                            {[match.home_team, match.away_team].map(team => (
+                              <button key={team} onClick={() => setLocalPenalty(p => ({ ...p, [match.id]: team }))}
+                                style={{
+                                  flex:1, maxWidth:160, padding:'8px 10px', borderRadius:8, cursor:'pointer', transition:'all 0.2s',
+                                  background: penWinner === team ? 'linear-gradient(135deg,#f97316,#ea580c)' : '#f8fafc',
+                                  border: penWinner === team ? '2px solid #ea580c' : '2px solid #e2e8f0',
+                                  color: penWinner === team ? '#fff' : 'var(--text2)',
+                                  fontFamily:'var(--font-c)', fontWeight:700, fontSize:12, letterSpacing:0.5
+                                }}>
+                                {penWinner === team ? '🏆 ' : ''}{team}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 ) : (
                   <div style={{ marginTop:10, textAlign:'center' }}>
                     <span style={{ fontFamily:'var(--font-d)', fontSize:24, color:'var(--blue)', letterSpacing:4 }}>
                       {existing ? `${existing.predicted_home} — ${existing.predicted_away}` : '? — ?'}
                     </span>
+                    {existing?.predicted_penalty_winner && (
+                      <span style={{ display:'inline-block', marginLeft:8, fontSize:11, background:'rgba(251,146,60,0.12)', border:'1px solid rgba(251,146,60,0.3)', borderRadius:6, padding:'2px 8px', color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700 }}>
+                        🟡 pen. {existing.predicted_penalty_winner}
+                      </span>
+                    )}
                     <span style={{ fontSize:11, color:'var(--text3)', marginLeft:8, fontFamily:'var(--font-c)' }}>
                       {existing ? 'tu predicción' : 'sin predicción'}
                     </span>
@@ -342,6 +386,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                           <div style={{ width:18, height:18, borderRadius:'50%', background:'var(--blue)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'var(--gold)', fontWeight:800 }}>{currentUser.name[0]}</div>
                           <span style={{ fontFamily:'var(--font-c)', fontWeight:700, color:'var(--blue)', fontSize:12 }}>{currentUser.name}</span>
                           <span style={{ fontFamily:'var(--font-d)', fontSize:16, color:'var(--blue)', letterSpacing:2 }}>{existing.predicted_home}-{existing.predicted_away}</span>
+                          {existing.predicted_penalty_winner && <span style={{ fontSize:10, color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700 }}>🟡{existing.predicted_penalty_winner}</span>}
                           {finished && <span style={{ fontSize:11, color: calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig) > 0 ? '#16a34a' : '#dc2626', fontWeight:700 }}>
                             +{calcularPuntos(existing.predicted_home, existing.predicted_away, match.home_score, match.away_score, scoringConfig)}pts
                           </span>}
@@ -356,6 +401,7 @@ export default function Knockout({ currentUser, matches, predictions, bracketPic
                             <div style={{ width:18, height:18, borderRadius:'50%', background:AVATAR_COLORS[participants.indexOf(player)%AVATAR_COLORS.length], display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'#fff', fontWeight:800 }}>{player.name[0]}</div>
                             <span style={{ fontFamily:'var(--font-c)', fontWeight:600, color:'var(--text2)', fontSize:12 }}>{player.name}</span>
                             <span style={{ fontFamily:'var(--font-d)', fontSize:16, color:'var(--text)', letterSpacing:2 }}>{pred.predicted_home}-{pred.predicted_away}</span>
+                            {pred.predicted_penalty_winner && <span style={{ fontSize:10, color:'#c2410c', fontFamily:'var(--font-c)', fontWeight:700 }}>🟡{pred.predicted_penalty_winner}</span>}
                             {pts !== null && <span style={{ fontSize:11, color: pts > 0 ? '#16a34a' : '#dc2626', fontWeight:700 }}>+{pts}pts</span>}
                           </div>
                         )
