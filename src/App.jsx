@@ -273,7 +273,7 @@ export default function App() {
 
         {/* Content */}
         <div className="fade-up" key={tab}>
-          {tab === 'leaderboard' && <Leaderboard leaderboard={leaderboard} currentUser={currentUser} scoringConfig={scoringConfig} />}
+          {tab === 'leaderboard' && <Leaderboard leaderboard={leaderboard} currentUser={currentUser} scoringConfig={scoringConfig} topScorerPicks={topScorerPicks} participants={participants} />}
           {tab === 'matches'     && <Matches matches={matches} predictions={predictions} currentUser={currentUser} formatDate={formatDateColombia} isLocked={isMatchLocked} />}
           {tab === 'picks'       && <MyPicks currentUser={currentUser} matches={matches} predictions={predictions} groupOrderPicks={groupOrderPicks} topScorerPicks={topScorerPicks} scoringConfig={scoringConfig} onRefresh={loadAll} notify={notify} loginUser={loginUser} participants={participants} />}
           {tab === 'knockout'    && <Knockout currentUser={currentUser} matches={matches} predictions={predictions} bracketPicks={bracketPicks} appConfig={appConfig} scoringConfig={scoringConfig} onRefresh={loadAll} notify={notify} loginUser={loginUser} participants={participants} />}
