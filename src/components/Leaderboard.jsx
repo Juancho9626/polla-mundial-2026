@@ -1,7 +1,7 @@
 const AVATAR_COLORS = ['#003087','#4fc3f7','#e63946','#2ec27e','#a78bfa','#fb923c','#f472b6','#34d399','#60a5fa','#fbbf24']
 const MEDALS = ['🥇','🥈','🥉']
 
-export default function Leaderboard({ leaderboard, currentUser, scoringConfig }) {
+export default function Leaderboard({ leaderboard, currentUser, scoringConfig, topScorerPicks = [], participants = [] }) {
   if (!leaderboard.length) return (
     <div style={{ textAlign:'center', padding:'80px 20px' }}>
       <div style={{ fontSize:60 }}>👥</div>
@@ -89,7 +89,27 @@ export default function Leaderboard({ leaderboard, currentUser, scoringConfig })
           </tbody>
         </table>
       </div>
-
+{/* Goleadores elegidos por todos */}
+      {topScorerPicks.length > 0 && (
+        <div style={{ marginTop:24, background:'var(--glass)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'18px 16px', boxShadow:'var(--shadow)' }}>
+          <h3 style={{ fontFamily:'var(--font-o)', fontSize:18, fontWeight:700, letterSpacing:2, color:'var(--blue)', textTransform:'uppercase', marginBottom:12 }}>👟 Goleadores Elegidos</h3>
+          <div style={{ display:'grid', gap:6 }}>
+            {topScorerPicks
+              .map(t => ({ ...t, p: participants.find(pa => pa.id === t.participant_id) }))
+              .filter(t => t.p)
+              .sort((a,b) => (b.points_earned||0) - (a.points_earned||0) || a.p.name.localeCompare(b.p.name))
+              .map(t => (
+                <div key={t.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', background: t.points_earned > 0 ? 'rgba(22,163,74,0.08)' : '#f8fafc', border:`1px solid ${t.points_earned > 0 ? 'rgba(22,163,74,0.3)' : 'var(--border)'}`, borderRadius:8, fontSize:13 }}>
+                  <span style={{ fontWeight:600, color:'var(--text)' }}>{t.p.name}</span>
+                  <span style={{ color:'var(--text2)', fontFamily:'var(--font-c)', letterSpacing:1 }}>{t.player_name}</span>
+                  <span style={{ fontWeight:700, minWidth:60, textAlign:'right', color: t.points_earned > 0 ? '#16a34a' : 'var(--text3)' }}>
+                    {t.points_earned > 0 ? `✅ +${t.points_earned} pts` : '—'}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
       {/* Legend */}
       <div style={{ marginTop:14, display:'flex', gap:14, flexWrap:'wrap' }}>
         {[
